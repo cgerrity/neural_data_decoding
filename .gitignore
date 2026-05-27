@@ -43,6 +43,7 @@ tests/fixtures/golden_weights/*.mat
 tests/fixtures/golden_batches/*.mat
 tests/fixtures/reference_partitions/*.mat
 tests/fixtures/reference_cm_tables/*.mat
+tests/fixtures/reference_encoding_parameters/*.yaml
 !tests/fixtures/**/.gitkeep
 
 # Local data (data lives on external mounted volumes; never committed)

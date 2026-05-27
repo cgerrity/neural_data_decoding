@@ -11,18 +11,25 @@ Schema (derived from ``cgg_generateBlankCMTable.m`` and the writer functions
 ``cgg_getClassifierOutputsFromProbabilities.m`` and
 ``cgg_procPredictionsFromDatastoreNetwork.m``):
 
-================================  ====================  ============================
-Column                            dtype                 Meaning
-================================  ====================  ============================
-``DataNumber``                    ``single``            1-indexed trial identifier
-``TrueValue``                     ``double`` (N, D)     Ground-truth labels per dim
-``Window_1`` … ``Window_K``       ``double`` (N, D)     Per-window predicted class
-``Aggregation_Prediction``        ``double`` (N, D)     Cross-window aggregate
-``TrialConfidence``               ``double`` (N,)       Per-trial confidence (=1 if
-                                                        confidence head disabled)
-``TaskConfidence``                ``double`` (N,)       Per-task confidence (=1 if
-                                                        task-confidence disabled)
-================================  ====================  ============================
+================================  ======================  ===========================
+Column                            dtype                   Meaning
+================================  ======================  ===========================
+``DataNumber``                    ``single`` (N, 1)       Trial identifier (global,
+                                                          sparse — NOT 1..N)
+``TrueValue``                     ``double`` (N, D)       Ground-truth labels per dim
+``Window_1`` … ``Window_K``       ``double`` (N, D)       Per-window predicted class
+``Aggregation_Prediction``        ``double`` (N, D)       Cross-window aggregate
+``TrialConfidence``               ``double`` (N, 1)       Scalar per-trial confidence
+                                                          (=1 when head disabled)
+``TaskConfidence``                ``double`` (N, D)       Per-dimension confidence
+                                                          (=1 when head disabled)
+================================  ======================  ===========================
+
+Shape confirmation from a real MATLAB validation run
+(``tests/fixtures/reference_cm_tables/CM_Table.mat`` — 106 trials,
+4 dimensions, 59 windows): ``TaskConfidence`` is ``106×4`` (per-dim), not
+``106×1``. ``TrialConfidence`` is ``106×1`` (per-trial). Both shape
+conventions are pinned by unit tests against that fixture.
 
 For Milestone A (Logistic Regression, no confidence) we emit ``Window_1`` ==
 ``Aggregation_Prediction`` and fill both confidence columns with ones. The
@@ -105,13 +112,16 @@ def write_cm_table_mat(
         If ``None`` and exactly one window is provided, it defaults to that
         window's predictions (Milestone A behavior).
     trial_confidence
-        Per-trial confidence in ``[0, 1]``, shape ``(N,)``. If ``None``, the
-        column is filled with ones — matching MATLAB's behavior when the
-        confidence head is disabled.
+        Per-trial confidence in ``[0, 1]``, shape ``(N,)`` or ``(N, 1)``.
+        Stored as a column vector ``(N, 1)`` per MATLAB convention. If
+        ``None``, the column is filled with ones — matching MATLAB's
+        behavior when the confidence head is disabled.
     task_confidence
-        Per-task confidence in ``[0, 1]``, shape ``(N,)``. If ``None``, the
-        column is filled with ones — matching MATLAB's behavior when the
-        task-confidence head is disabled.
+        Per-dimension confidence in ``[0, 1]``, shape ``(N, num_dimensions)``.
+        **Not** a single column — MATLAB stores one confidence value per
+        classification dimension. If ``None``, the column is filled with
+        ones of shape ``(N, num_dimensions)``, matching MATLAB's behavior
+        when the task-confidence head is disabled.
 
     Raises
     ------
@@ -152,21 +162,28 @@ def write_cm_table_mat(
             f"does not match true_values shape {tuple(true_values.shape)}."
         )
 
+    num_dimensions = int(true_values.shape[1])
+
     if trial_confidence is None:
         trial_confidence = np.ones(n_trials, dtype=np.float64)
-    elif trial_confidence.shape != (n_trials,):
-        raise ValueError(
-            f"trial_confidence must have shape ({n_trials},); "
-            f"got shape {tuple(trial_confidence.shape)}."
-        )
+    else:
+        trial_confidence = np.asarray(trial_confidence)
+        if trial_confidence.shape not in {(n_trials,), (n_trials, 1)}:
+            raise ValueError(
+                f"trial_confidence must have shape ({n_trials},) or ({n_trials}, 1); "
+                f"got shape {tuple(trial_confidence.shape)}."
+            )
 
     if task_confidence is None:
-        task_confidence = np.ones(n_trials, dtype=np.float64)
-    elif task_confidence.shape != (n_trials,):
-        raise ValueError(
-            f"task_confidence must have shape ({n_trials},); "
-            f"got shape {tuple(task_confidence.shape)}."
-        )
+        task_confidence = np.ones((n_trials, num_dimensions), dtype=np.float64)
+    else:
+        task_confidence = np.asarray(task_confidence)
+        if task_confidence.shape != (n_trials, num_dimensions):
+            raise ValueError(
+                f"task_confidence must have shape ({n_trials}, {num_dimensions}) "
+                f"to match TrueValue's dimension count; "
+                f"got shape {tuple(task_confidence.shape)}."
+            )
 
     table: dict[str, np.ndarray] = {
         "DataNumber": data_numbers.astype(np.float32, copy=False).reshape(-1, 1),
@@ -176,7 +193,7 @@ def write_cm_table_mat(
         table[f"Window_{k}"] = np.asarray(win, dtype=np.float64)
     table["Aggregation_Prediction"] = np.asarray(aggregation_prediction, dtype=np.float64)
     table["TrialConfidence"] = trial_confidence.astype(np.float64, copy=False).reshape(-1, 1)
-    table["TaskConfidence"] = task_confidence.astype(np.float64, copy=False).reshape(-1, 1)
+    table["TaskConfidence"] = task_confidence.astype(np.float64, copy=False)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     savemat(

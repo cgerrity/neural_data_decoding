@@ -150,6 +150,8 @@ def _cmd_train(args: argparse.Namespace) -> int:
     # but this captures the resolved per-run config either way.
     schema = OmegaConf.to_container(cfg, resolve=True)
     assert isinstance(schema, dict)
+    # Drop Hydra-internal keys that shouldn't appear in the MATLAB-facing YAML.
+    schema = {k: v for k, v in schema.items() if k != "defaults"}
     write_encoding_parameters_yaml(
         result_dir / ENCODING_PARAMETERS_FILENAME,
         run_config=schema,

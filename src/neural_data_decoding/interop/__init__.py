@@ -20,6 +20,9 @@ from neural_data_decoding.interop.cm_table_format import (
     write_cm_table_mat,
 )
 from neural_data_decoding.interop.folder_hierarchy import build_result_dir
+from neural_data_decoding.interop.matlab_table_writer import (
+    promote_struct_to_table,
+)
 from neural_data_decoding.interop.parameter_yaml import (
     ENCODING_PARAMETERS_FILENAME,
     read_encoding_parameters_yaml,
@@ -31,6 +34,7 @@ __all__ = [
     "TRAINING_CM_TABLE_FILENAME",
     "VALIDATION_CM_TABLE_FILENAME",
     "build_result_dir",
+    "promote_struct_to_table",
     "read_encoding_parameters_yaml",
     "write_cm_table_mat",
     "write_encoding_parameters_yaml",

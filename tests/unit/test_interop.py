@@ -16,6 +16,7 @@ from neural_data_decoding.interop import (
     write_cm_table_mat,
     write_encoding_parameters_yaml,
 )
+from neural_data_decoding.interop.parameter_yaml import translate_key
 
 
 # ───────────────────────── folder_hierarchy ─────────────────────────
@@ -143,8 +144,10 @@ def test_write_cm_table_round_trip_minimal(tmp_path: Path) -> None:
     np.testing.assert_array_equal(
         table.Aggregation_Prediction, window
     )  # Aggregate defaults to the single window
-    np.testing.assert_array_equal(table.TrialConfidence.ravel(), np.ones(n))
-    np.testing.assert_array_equal(table.TaskConfidence.ravel(), np.ones(n))
+    assert table.TrialConfidence.shape == (n, 1)
+    assert table.TaskConfidence.shape == (n, d)
+    np.testing.assert_array_equal(table.TrialConfidence, np.ones((n, 1)))
+    np.testing.assert_array_equal(table.TaskConfidence, np.ones((n, d)))
 
 
 def test_write_cm_table_multiple_windows(tmp_path: Path) -> None:
@@ -199,11 +202,18 @@ def test_write_cm_table_rejects_shape_mismatch(tmp_path: Path) -> None:
 
 
 def test_write_cm_table_with_confidence(tmp_path: Path) -> None:
-    """When confidence is supplied it lands in the right columns verbatim."""
+    """Confidence columns: TrialConfidence is (N, 1); TaskConfidence is (N, D)."""
     out = tmp_path / "CM_Table.mat"
-    n, d = 4, 1
-    trial_conf = np.array([0.1, 0.5, 0.9, 1.0])
-    task_conf = np.array([0.2, 0.4, 0.6, 0.8])
+    n, d = 4, 2
+    trial_conf = np.array([0.1, 0.5, 0.9, 1.0])  # (N,) — per-trial scalar
+    task_conf = np.array(  # (N, D) — per-dimension
+        [
+            [0.2, 0.3],
+            [0.4, 0.5],
+            [0.6, 0.7],
+            [0.8, 0.9],
+        ]
+    )
     write_cm_table_mat(
         out,
         data_numbers=np.arange(1, n + 1, dtype=np.int32),
@@ -215,8 +225,45 @@ def test_write_cm_table_with_confidence(tmp_path: Path) -> None:
 
     loaded = scipy.io.loadmat(str(out), squeeze_me=False, struct_as_record=False)
     table = loaded["CM_Table"][0, 0]
+    assert table.TrialConfidence.shape == (n, 1)
+    assert table.TaskConfidence.shape == (n, d)
     np.testing.assert_allclose(table.TrialConfidence.ravel(), trial_conf)
-    np.testing.assert_allclose(table.TaskConfidence.ravel(), task_conf)
+    np.testing.assert_allclose(table.TaskConfidence, task_conf)
+
+
+def test_task_confidence_default_matches_truevalue_dim_count(tmp_path: Path) -> None:
+    """When task_confidence is omitted, the default is (N, num_dims), not (N, 1).
+
+    Pinned by the real MATLAB fixture in
+    tests/fixtures/reference_cm_tables/CM_Table.mat where TaskConfidence is
+    (106, 4) — one confidence value per classification dimension.
+    """
+    out = tmp_path / "CM_Table.mat"
+    n, d = 5, 4  # 4 dimensions like the real Quaddle/Dimension target
+    write_cm_table_mat(
+        out,
+        data_numbers=np.arange(1, n + 1, dtype=np.int32),
+        true_values=np.zeros((n, d), dtype=np.float64),
+        window_predictions=[np.zeros((n, d), dtype=np.float64)],
+    )
+    loaded = scipy.io.loadmat(str(out), squeeze_me=False, struct_as_record=False)
+    table = loaded["CM_Table"][0, 0]
+    assert table.TaskConfidence.shape == (n, d)
+    assert table.TrialConfidence.shape == (n, 1)
+
+
+def test_task_confidence_wrong_shape_rejected(tmp_path: Path) -> None:
+    """A 1-D task_confidence is rejected — it must be (N, num_dimensions)."""
+    out = tmp_path / "CM_Table.mat"
+    n, d = 5, 4
+    with pytest.raises(ValueError, match="task_confidence must have shape"):
+        write_cm_table_mat(
+            out,
+            data_numbers=np.arange(1, n + 1, dtype=np.int32),
+            true_values=np.zeros((n, d), dtype=np.float64),
+            window_predictions=[np.zeros((n, d), dtype=np.float64)],
+            task_confidence=np.ones(n),  # (N,) — wrong, should be (N, D)
+        )
 
 
 # ───────────────────────── parameter_yaml ─────────────────────────
@@ -226,21 +273,24 @@ def test_write_yaml_emits_full_schema_even_for_partial_run_config(tmp_path: Path
     """A run that only overrides one field still writes every schema field."""
     out = tmp_path / ENCODING_PARAMETERS_FILENAME
     schema = {
-        "WeightKL": 1.0,
-        "WeightReconstruction": 100.0,
-        "WeightClassification": 10.0,
-        "Epoch": "Decision",
-        "Target": "Dimension",
+        "weight_kl": 1.0,
+        "weight_reconstruction": 100.0,
+        "weight_classification": 10.0,
+        "epoch": "Decision",
+        "target": "Dimension",
     }
-    run = {"WeightKL": 5.0}
+    run = {"weight_kl": 5.0}
     merged = write_encoding_parameters_yaml(
         out, run_config=run, schema_template=schema
     )
 
-    assert merged["WeightKL"] == 5.0  # override applied
+    # Default is translate_keys=True — keys now in MATLAB form.
+    assert merged["WeightKL"] == 5.0  # override applied + translated
     assert merged["WeightReconstruction"] == 100.0  # default kept
-    # All schema fields are present.
-    assert set(merged.keys()) == set(schema.keys())
+    assert set(merged.keys()) == {
+        "WeightKL", "WeightReconstruction", "WeightClassification",
+        "Epoch", "Target",
+    }
 
 
 def test_write_yaml_field_ordering_matches_schema(tmp_path: Path) -> None:
@@ -249,18 +299,19 @@ def test_write_yaml_field_ordering_matches_schema(tmp_path: Path) -> None:
     schema = {"b": 1, "a": 2, "c": 3}
     write_encoding_parameters_yaml(out, run_config={}, schema_template=schema)
     text = out.read_text()
-    # Each field appears in the file in schema order.
-    assert text.index("b:") < text.index("a:") < text.index("c:")
+    # Each field appears in the file in schema order (B/A/C → PascalCase).
+    assert text.index("B:") < text.index("A:") < text.index("C:")
 
 
 def test_read_yaml_round_trip(tmp_path: Path) -> None:
-    """Writing then reading yields the same mapping."""
+    """Writing then reading yields the same mapping (keys MATLAB-translated)."""
     out = tmp_path / ENCODING_PARAMETERS_FILENAME
-    schema = {"WeightKL": 1.0, "Epoch": "Decision"}
-    run = {"WeightKL": 5.0, "Epoch": "Synthetic_Easy"}
+    schema = {"weight_kl": 1.0, "epoch": "Decision"}
+    run = {"weight_kl": 5.0, "epoch": "Synthetic_Easy"}
     written = write_encoding_parameters_yaml(out, run_config=run, schema_template=schema)
     loaded = read_encoding_parameters_yaml(out)
     assert loaded == written
+    assert "WeightKL" in loaded
 
 
 def test_write_yaml_creates_parent_directory(tmp_path: Path) -> None:
@@ -270,3 +321,50 @@ def test_write_yaml_creates_parent_directory(tmp_path: Path) -> None:
         nested, run_config={}, schema_template={"x": 1}
     )
     assert nested.exists()
+
+
+def test_write_yaml_can_disable_translation(tmp_path: Path) -> None:
+    """Setting translate_keys=False emits the Python snake_case names verbatim."""
+    out = tmp_path / ENCODING_PARAMETERS_FILENAME
+    schema = {"weight_kl": 1.0}
+    written = write_encoding_parameters_yaml(
+        out, run_config={}, schema_template=schema, translate_keys=False
+    )
+    assert "weight_kl" in written
+    assert "WeightKL" not in written
+
+
+# ───────────────────────── translate_key ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    "python_key,expected",
+    [
+        # Common PascalCase via the fallback.
+        ("weight_classification", "WeightClassification"),
+        ("is_variational", "IsVariational"),
+        ("epoch", "Epoch"),
+        # Acronyms — must keep KL / STD / L2 / IDX uppercase.
+        ("weight_kl", "WeightKL"),
+        ("loss_factor_kl", "LossFactorKL"),
+        ("std_channel_offset", "STDChannelOffset"),
+        ("std_white_noise", "STDWhiteNoise"),
+        ("l2_factor", "L2Factor"),
+        ("starting_idx", "StartingIDX"),
+        ("ending_idx", "EndingIDX"),
+        # Embedded-underscore names MATLAB keeps as-is.
+        ("loss_type_decoder", "LossType_Decoder"),
+        ("loss_type_classifier", "LossType_Classifier"),
+        ("freeze_cfg", "Freeze_cfg"),
+        ("time_start", "Time_Start"),
+        # camelCase exceptions from the reference YAML.
+        ("max_worker_mini_batch_size", "maxworkerMiniBatchSize"),
+        ("want_stratified_partition", "wantStratifiedPartition"),
+        ("is_function", "isfunction"),
+    ],
+)
+def test_translate_key_matches_reference_yaml(
+    python_key: str, expected: str
+) -> None:
+    """Each translation mirrors the field names in the real EncodingParameters.yaml."""
+    assert translate_key(python_key) == expected
