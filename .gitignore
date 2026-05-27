@@ -46,7 +46,9 @@ tests/fixtures/reference_cm_tables/*.mat
 !tests/fixtures/**/.gitkeep
 
 # Local data (data lives on external mounted volumes; never committed)
-data/
+# Anchor to repo root with a leading slash so this doesn't match the
+# `src/neural_data_decoding/data/` source-code package.
+/data/
 *.h5
 checkpoints/
 results/

@@ -14,9 +14,14 @@ authors = [
 ]
 
 dependencies = [
-    # Core deep learning — 2.4+ required for NumPy 2.x ABI compatibility
-    "torch>=2.4",
-    "numpy>=1.24,<3",
+    # Core deep learning.
+    # NOTE: PyTorch dropped Intel-macOS wheels after 2.2.2, and NumPy 2.x
+    # requires a torch wheel built against the new ABI. On Apple Silicon
+    # with a native arm64 Python you can bump both. On Intel macOS (or a
+    # Rosetta-translated Python) the only compatible combination is the
+    # 2.2.x torch line with NumPy <2.
+    "torch>=2.1,<2.3",
+    "numpy>=1.24,<2",
     "scipy>=1.11",
     # .mat file IO — scipy handles <v7.3, mat73 handles v7.3 (HDF5)
     "h5py>=3.10",
