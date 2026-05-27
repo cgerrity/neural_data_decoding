@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+env/
+.python-version
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache/
+
+# Docs build output
+docs/build/
+docs/_build/
+site/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Generated fixtures (large MATLAB outputs — regenerate with scripts/prepare_golden_fixtures.py)
+tests/fixtures/golden_weights/*.mat
+tests/fixtures/golden_batches/*.mat
+tests/fixtures/reference_partitions/*.mat
+tests/fixtures/reference_cm_tables/*.mat
+!tests/fixtures/**/.gitkeep
+
+# Local data (data lives on external mounted volumes; never committed)
+data/
+*.h5
+checkpoints/
+results/
+outputs/
+multirun/    # Hydra default sweep output
+wandb/
+
+# Environment
+.env
+.env.local

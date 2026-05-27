@@ -1,0 +1,16 @@
+# Optimal — the production-target configuration.
+#
+# Mirrors PARAMETERS_OPTIMAL_cgg_runAutoEncoder_v3.m (the `_v3` suffix on the
+# MATLAB filename is a historical artifact; semantically this is just "the
+# optimal config").
+#
+# At present, base.yaml already encodes the Optimal values directly because
+# Optimal is the production target. This file exists as the canonical alias
+# so Milestone C tests can reference it explicitly, and as a future override
+# layer if "Optimal" diverges from "Base" again.
+
+defaults:
+  - base
+  - _self_
+
+# Currently Optimal == Base. Override fields here if/when they diverge.

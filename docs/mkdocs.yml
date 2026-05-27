@@ -1,0 +1,108 @@
+# MkDocs Material config for the narrative documentation site.
+#
+# Build:    mkdocs build --strict
+# Serve:    mkdocs serve
+# Deploy:   mike deploy <version>   (versioned docs via mike)
+#
+# The API reference (Sphinx-generated) builds separately under docs/api/.
+# scripts/build_docs.sh runs both and assembles the unified site.
+
+site_name: neural_data_decoding
+site_description: Python port of the MATLAB neural decoding pipeline.
+site_dir: build/narrative
+
+docs_dir: narrative
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.snippets
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - toc:
+      permalink: true
+  - tables
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [../src]
+          options:
+            docstring_style: numpy
+            show_source: true
+            show_root_heading: true
+            members_order: source
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - User guide:
+      - user_guide/running_a_training.md
+      - user_guide/parameter_sweeps.md
+      - user_guide/resuming_an_interrupted_run.md
+      - user_guide/running_on_accre.md
+      - user_guide/inspecting_results.md
+  - Concepts:
+      - concepts/the_training_lifecycle.md
+      - concepts/multi_objective_losses.md
+      - concepts/dynamic_curriculum.md
+      - concepts/single_session_batching.md
+      - concepts/vae_sampling.md
+      - concepts/the_confidence_pd_controller.md
+  - Cookbook:
+      - cookbook/add_a_new_architecture.md
+      - cookbook/add_a_new_loss_component.md
+      - cookbook/add_a_new_curriculum_schedule.md
+      - cookbook/add_a_new_target_task.md
+      - cookbook/debug_a_failing_run.md
+      - cookbook/compare_two_sweep_configs.md
+  - Deployment:
+      - deployment/slurm_submission.md
+      - deployment/cluster_quickstart_accre.md
+      - deployment/monitoring_a_running_job.md
+      - deployment/recovering_from_failure.md
+  - Glossary: glossary.md
+  - Troubleshooting: troubleshooting.md
+  - Contributing: contributing.md
+  - Decision records:
+      - adrs/index.md
+      - adrs/001_tiered_parity_not_bit_exact.md
+
+strict: true
+
+# Files under docs/ that intentionally are NOT in the nav. Glob-friendly.
+# (Additional ADRs added during later milestones can either be added to the
+# nav above or routed through here once we add an awesome-pages-style plugin.)
+not_in_nav: |

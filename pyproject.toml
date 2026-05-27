@@ -1,0 +1,135 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "neural_data_decoding"
+version = "0.0.1"
+description = "Python port of the MATLAB neural decoding pipeline (Processing_Functions_cgg)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [
+    { name = "Charles Gerrity" },
+]
+
+dependencies = [
+    # Core deep learning — 2.4+ required for NumPy 2.x ABI compatibility
+    "torch>=2.4",
+    "numpy>=1.24,<3",
+    "scipy>=1.11",
+    # .mat file IO — scipy handles <v7.3, mat73 handles v7.3 (HDF5)
+    "h5py>=3.10",
+    "mat73>=0.65",
+    # Tabular + scientific
+    "pandas>=2.1",
+    "scikit-learn>=1.3",
+    # Config composition + serialization
+    "pyyaml>=6.0",
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    # Telemetry
+    "wandb>=0.16",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "black>=24",
+    "pre-commit>=3.5",
+    "nbstripout>=0.6",
+    "jupyter>=1.0",
+    "ipykernel>=6.27",
+    "interrogate>=1.5",
+]
+docs = [
+    # MkDocs narrative track
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+    "mike>=2.0",
+    # Sphinx API track
+    "sphinx>=7.2",
+    "sphinx-autodoc-typehints>=1.25",
+    "sphinx-autobuild>=2024.2",
+    "myst-parser>=2.0",
+    "furo>=2024.1",
+]
+cluster = [
+    "submitit>=1.5",
+    "ray[tune]>=2.9",
+]
+
+[project.scripts]
+neural_data_decoding = "neural_data_decoding.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/neural_data_decoding"]
+
+# ───────────────────────── Lint / format ─────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# E,W = pycodestyle, F = pyflakes, I = isort, B = bugbear,
+# UP = pyupgrade, NPY = numpy-specific, PT = pytest-style
+select = ["E", "W", "F", "I", "B", "UP", "NPY", "PT"]
+ignore = [
+    "E501",  # line length handled by black
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]  # allow assert False in tests
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+# ───────────────────────── Docstring coverage ─────────────────────────
+[tool.interrogate]
+ignore-init-method = false
+ignore-init-module = true
+ignore-magic = false
+ignore-semiprivate = false
+ignore-private = true            # leading-underscore helpers only need one-line summary (enforced manually)
+ignore-property-decorators = false
+ignore-module = false
+ignore-nested-functions = true
+ignore-setters = false
+fail-under = 100
+exclude = ["tests", "scripts", "docs", "notebooks"]
+ignore-regex = ["^get$", "^mock_.*", ".*BaseClass.*"]
+verbose = 2
+quiet = false
+color = true
+omit-covered-files = false
+
+# ───────────────────────── Pytest ─────────────────────────
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+testpaths = ["tests"]
+markers = [
+    "parity: tests that compare Python output against MATLAB reference fixtures",
+    "slow: tests that take longer than ~5s",
+    "needs_matlab: tests that require MATLAB to be installed",
+    "needs_gpu: tests that require CUDA",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/neural_data_decoding"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
