@@ -1,0 +1,198 @@
+"""``CM_Table`` schema + ``.mat`` writer (primary MATLAB-interop output).
+
+The MATLAB analysis pipeline (``DATA_cggAllNetworkEncoderResults.m`` →
+``FIGURE_cggAllNetworkEncoderResults.m``) consumes per-trial confusion-matrix
+telemetry from ``.mat`` files containing a single MATLAB table named
+``CM_Table``. Critical Note #16 in the migration plan identifies this as the
+**primary** MATLAB-interop surface — get this wrong and the entire downstream
+analysis pipeline can't load Python output.
+
+Schema (derived from ``cgg_generateBlankCMTable.m`` and the writer functions
+``cgg_getClassifierOutputsFromProbabilities.m`` and
+``cgg_procPredictionsFromDatastoreNetwork.m``):
+
+================================  ====================  ============================
+Column                            dtype                 Meaning
+================================  ====================  ============================
+``DataNumber``                    ``single``            1-indexed trial identifier
+``TrueValue``                     ``double`` (N, D)     Ground-truth labels per dim
+``Window_1`` … ``Window_K``       ``double`` (N, D)     Per-window predicted class
+``Aggregation_Prediction``        ``double`` (N, D)     Cross-window aggregate
+``TrialConfidence``               ``double`` (N,)       Per-trial confidence (=1 if
+                                                        confidence head disabled)
+``TaskConfidence``                ``double`` (N,)       Per-task confidence (=1 if
+                                                        task-confidence disabled)
+================================  ====================  ============================
+
+For Milestone A (Logistic Regression, no confidence) we emit ``Window_1`` ==
+``Aggregation_Prediction`` and fill both confidence columns with ones. The
+writer accepts the full schema so Milestones B and C can populate the missing
+columns without touching this module.
+
+The serialization format is **a SciPy struct of arrays** (``scipy.io.savemat``
+with a single key ``CM_Table`` mapping to a dict of column arrays). MATLAB's
+``load`` returns this as a struct; the downstream ``cgg_getAllEncoderCMTable``
+accesses fields via ``m_CM_Table.CM_Table.<field>``, which works identically
+for structs and tables. A ``struct2table`` shim on the MATLAB side handles
+table-typed callers — that shim lives outside this Python package.
+
+Examples
+--------
+>>> import numpy as np
+>>> from pathlib import Path
+>>> import tempfile
+>>> data_numbers = np.array([1, 2, 3], dtype=np.int32)
+>>> true_values = np.array([[0, 1], [1, 0], [0, 0]], dtype=np.float64)
+>>> window_predictions = [np.array([[0, 1], [1, 0], [1, 0]], dtype=np.float64)]
+>>> with tempfile.TemporaryDirectory() as tmp:
+...     out = Path(tmp) / "CM_Table_Validation.mat"
+...     write_cm_table_mat(
+...         out,
+...         data_numbers=data_numbers,
+...         true_values=true_values,
+...         window_predictions=window_predictions,
+...     )
+...     out.exists()
+True
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+from scipy.io import savemat
+
+
+_VALIDATION_FILENAME = "CM_Table_Validation.mat"
+_TRAINING_FILENAME = "CM_Table.mat"
+
+
+def write_cm_table_mat(
+    output_path: Path,
+    *,
+    data_numbers: np.ndarray,
+    true_values: np.ndarray,
+    window_predictions: Sequence[np.ndarray],
+    aggregation_prediction: Optional[np.ndarray] = None,
+    trial_confidence: Optional[np.ndarray] = None,
+    task_confidence: Optional[np.ndarray] = None,
+) -> None:
+    """Write a ``CM_Table`` ``.mat`` file in the MATLAB-readable schema.
+
+    Parameters
+    ----------
+    output_path
+        Destination path. The file is overwritten if it exists. The MATLAB
+        consumer expects the filename ``CM_Table.mat`` (training) or
+        ``CM_Table_Validation.mat`` (validation); see the
+        :data:`VALIDATION_CM_TABLE_FILENAME` and
+        :data:`TRAINING_CM_TABLE_FILENAME` constants.
+    data_numbers
+        Per-trial integer identifiers, shape ``(N,)``. Stored as ``single``
+        per MATLAB's schema; integer inputs are cast to ``float32`` on write.
+    true_values
+        Ground-truth labels, shape ``(N, num_dimensions)``. Stored as
+        ``double``.
+    window_predictions
+        One ``(N, num_dimensions)`` array per analysis window. Each becomes
+        the ``Window_k`` column (1-indexed). At least one window is required
+        — Milestone A passes a single window and is happy with that.
+    aggregation_prediction
+        Cross-window aggregated prediction, shape ``(N, num_dimensions)``.
+        If ``None`` and exactly one window is provided, it defaults to that
+        window's predictions (Milestone A behavior).
+    trial_confidence
+        Per-trial confidence in ``[0, 1]``, shape ``(N,)``. If ``None``, the
+        column is filled with ones — matching MATLAB's behavior when the
+        confidence head is disabled.
+    task_confidence
+        Per-task confidence in ``[0, 1]``, shape ``(N,)``. If ``None``, the
+        column is filled with ones — matching MATLAB's behavior when the
+        task-confidence head is disabled.
+
+    Raises
+    ------
+    ValueError
+        If shapes are inconsistent or ``window_predictions`` is empty.
+    """
+    output_path = Path(output_path)
+
+    if not window_predictions:
+        raise ValueError("window_predictions must contain at least one window.")
+
+    n_trials = int(data_numbers.shape[0])
+
+    if true_values.ndim != 2 or true_values.shape[0] != n_trials:
+        raise ValueError(
+            f"true_values must have shape (N, D) with N={n_trials}; "
+            f"got shape {tuple(true_values.shape)}."
+        )
+
+    for k, win in enumerate(window_predictions, start=1):
+        if win.shape != true_values.shape:
+            raise ValueError(
+                f"window_predictions[{k - 1}] has shape {tuple(win.shape)}; "
+                f"expected {tuple(true_values.shape)} to match true_values."
+            )
+
+    if aggregation_prediction is None:
+        if len(window_predictions) == 1:
+            aggregation_prediction = window_predictions[0]
+        else:
+            raise ValueError(
+                "aggregation_prediction is required when more than one "
+                "window is supplied."
+            )
+    elif aggregation_prediction.shape != true_values.shape:
+        raise ValueError(
+            f"aggregation_prediction shape {tuple(aggregation_prediction.shape)} "
+            f"does not match true_values shape {tuple(true_values.shape)}."
+        )
+
+    if trial_confidence is None:
+        trial_confidence = np.ones(n_trials, dtype=np.float64)
+    elif trial_confidence.shape != (n_trials,):
+        raise ValueError(
+            f"trial_confidence must have shape ({n_trials},); "
+            f"got shape {tuple(trial_confidence.shape)}."
+        )
+
+    if task_confidence is None:
+        task_confidence = np.ones(n_trials, dtype=np.float64)
+    elif task_confidence.shape != (n_trials,):
+        raise ValueError(
+            f"task_confidence must have shape ({n_trials},); "
+            f"got shape {tuple(task_confidence.shape)}."
+        )
+
+    table: dict[str, np.ndarray] = {
+        "DataNumber": data_numbers.astype(np.float32, copy=False).reshape(-1, 1),
+        "TrueValue": np.asarray(true_values, dtype=np.float64),
+    }
+    for k, win in enumerate(window_predictions, start=1):
+        table[f"Window_{k}"] = np.asarray(win, dtype=np.float64)
+    table["Aggregation_Prediction"] = np.asarray(aggregation_prediction, dtype=np.float64)
+    table["TrialConfidence"] = trial_confidence.astype(np.float64, copy=False).reshape(-1, 1)
+    table["TaskConfidence"] = task_confidence.astype(np.float64, copy=False).reshape(-1, 1)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    savemat(
+        str(output_path),
+        {"CM_Table": table},
+        do_compression=True,
+        oned_as="column",
+    )
+
+
+VALIDATION_CM_TABLE_FILENAME = _VALIDATION_FILENAME
+TRAINING_CM_TABLE_FILENAME = _TRAINING_FILENAME
+
+
+__all__ = [
+    "TRAINING_CM_TABLE_FILENAME",
+    "VALIDATION_CM_TABLE_FILENAME",
+    "write_cm_table_mat",
+]

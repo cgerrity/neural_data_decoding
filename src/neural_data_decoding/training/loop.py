@@ -1,0 +1,282 @@
+"""Single-stage training & validation kernels.
+
+Ports the per-iteration body of ``cgg_trainNetwork.m`` — the simplified
+classifier-only variant used by Milestone A. The two-stage state machine
+that decides *when* to call these kernels lives in :mod:`lifecycle`.
+
+Critical Note #28 is the load-bearing decision here: there is **one**
+``total_loss.backward()`` call per iteration, on the single aggregate scalar
+returned by :func:`~neural_data_decoding.training.losses.multi_objective.aggregate_total_loss`.
+Encoder, decoder, and classifier (when all three exist) gradient-flow from
+that one scalar via autograd; they do **not** each call ``.backward()``
+separately on intermediate sums.
+
+Milestone A only exercises the classifier path. Hooks for the
+reconstruction / KL / confidence / offset_and_scale components are present
+in :mod:`losses.multi_objective` but unused here — Milestone C will add the
+encoder/decoder forward call and feed those components into the aggregator.
+
+Examples
+--------
+The kernel is straightforward to invoke once the model and dataloader are
+ready::
+
+    metrics = train_one_epoch(
+        model=classifier,
+        dataloader=train_loader,
+        optimizer=optimizer,
+        device=torch.device("cpu"),
+        loss_weights={"classification": 1.0},
+        grad_clip_norm=1.0,
+    )
+    print(metrics.total_loss, metrics.classification_loss, metrics.accuracy)
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Optional
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+from neural_data_decoding.training.losses.classification import (
+    multi_head_cross_entropy,
+)
+from neural_data_decoding.training.losses.multi_objective import aggregate_total_loss
+
+
+@dataclass(slots=True)
+class EpochMetrics:
+    """Per-epoch aggregate metrics returned by the train / validate kernels.
+
+    Attributes
+    ----------
+    total_loss
+        Mean (across iterations) of the aggregated multi-objective loss.
+    classification_loss
+        Mean cross-entropy contribution. Always populated.
+    accuracy
+        Mean per-dimension classification accuracy (averaged across both
+        dimensions and trials). 0.0 when ``targets`` is missing.
+    num_iterations
+        Number of minibatches processed.
+    num_trials
+        Total trial count across all minibatches (sum of batch sizes).
+    """
+
+    total_loss: float
+    classification_loss: float
+    accuracy: float
+    num_iterations: int
+    num_trials: int
+
+
+def train_one_epoch(
+    *,
+    model: nn.Module,
+    dataloader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    loss_weights: Mapping[str, float],
+    class_weights_per_dim: Optional[list[torch.Tensor]] = None,
+    grad_clip_norm: Optional[float] = None,
+) -> EpochMetrics:
+    """Run one supervised training epoch — Milestone A classifier path.
+
+    Parameters
+    ----------
+    model
+        Classifier module. For Milestone A this is a
+        :class:`~neural_data_decoding.models.classifier.MultiHeadClassifier`
+        directly; later milestones will wrap encoder+decoder+classifier in
+        a composite module.
+    dataloader
+        Yields the dict produced by
+        :func:`~neural_data_decoding.data.dataset.collate_trials`:
+        ``{"x": (B, T, F), "targets": (B, D), "metadata": [...]}``.
+    optimizer
+        Already constructed; weight decay handled via ``AdamW`` (Critical
+        Note #5 — not via post-hoc gradient hooks).
+    device
+        Device to move tensors to before forward pass.
+    loss_weights
+        Per-component weight dict passed to
+        :func:`~neural_data_decoding.training.losses.multi_objective.aggregate_total_loss`.
+        Milestone A only needs ``{"classification": <w>}``; extra keys are
+        forwarded harmlessly.
+    class_weights_per_dim
+        Optional per-dimension inverse-frequency class weights. Compute
+        once from the training labels (see
+        :func:`~neural_data_decoding.training.losses.classification.inverse_frequency_class_weights`)
+        and pass on every epoch.
+    grad_clip_norm
+        Global L2 gradient-norm clip threshold (Critical Note: matches
+        MATLAB's ``GradientClipType='Global'``). ``None`` disables clipping.
+
+    Returns
+    -------
+    EpochMetrics
+        Aggregated training metrics over this epoch.
+    """
+    model.train()
+    sums = _MetricSums()
+
+    for batch in dataloader:
+        x = batch["x"].to(device, non_blocking=True)
+        targets = batch["targets"].to(device, non_blocking=True)
+        batch_size = int(x.shape[0])
+
+        optimizer.zero_grad(set_to_none=True)
+        logits = model(x)
+        cls_loss = multi_head_cross_entropy(
+            logits, targets, class_weights_per_dim=class_weights_per_dim
+        )
+        total_loss, _ = aggregate_total_loss(
+            classification_loss=cls_loss, weights=loss_weights
+        )
+        total_loss.backward()
+        if grad_clip_norm is not None:
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
+        optimizer.step()
+
+        sums.update(
+            total_loss=total_loss.item(),
+            classification_loss=cls_loss.item(),
+            accuracy=_per_dim_accuracy(logits, targets),
+            batch_size=batch_size,
+        )
+
+    return sums.finalize()
+
+
+@torch.no_grad()
+def validate(
+    *,
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device,
+    loss_weights: Mapping[str, float],
+    class_weights_per_dim: Optional[list[torch.Tensor]] = None,
+) -> EpochMetrics:
+    """Run one validation pass — no gradients, no BN updates (Critical Note #34).
+
+    Parameters
+    ----------
+    model
+        Same module as training; will be put in ``.eval()`` mode here.
+    dataloader
+        Validation dataloader (typically a different split than train).
+    device
+        Device to move tensors to.
+    loss_weights
+        Same weight dict as training, so the reported validation loss is
+        comparable.
+    class_weights_per_dim
+        Class weights — typically the **training** distribution's weights
+        (so the metric reflects training-aware loss); MATLAB does the same.
+
+    Returns
+    -------
+    EpochMetrics
+        Aggregated validation metrics over the dataloader.
+    """
+    model.eval()
+    sums = _MetricSums()
+
+    for batch in dataloader:
+        x = batch["x"].to(device, non_blocking=True)
+        targets = batch["targets"].to(device, non_blocking=True)
+        batch_size = int(x.shape[0])
+
+        logits = model(x)
+        cls_loss = multi_head_cross_entropy(
+            logits, targets, class_weights_per_dim=class_weights_per_dim
+        )
+        total_loss, _ = aggregate_total_loss(
+            classification_loss=cls_loss, weights=loss_weights
+        )
+
+        sums.update(
+            total_loss=total_loss.item(),
+            classification_loss=cls_loss.item(),
+            accuracy=_per_dim_accuracy(logits, targets),
+            batch_size=batch_size,
+        )
+
+    return sums.finalize()
+
+
+def _per_dim_accuracy(
+    logits_per_dim: list[torch.Tensor], targets: torch.Tensor
+) -> float:
+    """Mean classification accuracy across dimensions and trials.
+
+    For sequence logits ``(B, T, K)`` predictions are taken at the **last
+    time step** — matches MATLAB's ``cgg_getLastSequenceValue`` convention
+    used by the confidence and prediction kernels (Critical Note #36).
+    """
+    num_dims = len(logits_per_dim)
+    if num_dims == 0:
+        return 0.0
+    total_correct = 0.0
+    total = 0.0
+    for d, logits in enumerate(logits_per_dim):
+        if logits.ndim == 3:
+            logits = logits[:, -1, :]  # (B, K) — last time step
+        preds = logits.argmax(dim=-1)  # (B,)
+        total_correct += (preds == targets[:, d]).float().sum().item()
+        total += float(preds.shape[0])
+    return total_correct / total if total > 0 else 0.0
+
+
+class _MetricSums:
+    """Running sums for :class:`EpochMetrics` assembly."""
+
+    __slots__ = (
+        "total_loss",
+        "classification_loss",
+        "accuracy_weighted",
+        "iterations",
+        "trials",
+    )
+
+    def __init__(self) -> None:
+        self.total_loss = 0.0
+        self.classification_loss = 0.0
+        self.accuracy_weighted = 0.0
+        self.iterations = 0
+        self.trials = 0
+
+    def update(
+        self,
+        *,
+        total_loss: float,
+        classification_loss: float,
+        accuracy: float,
+        batch_size: int,
+    ) -> None:
+        """Accumulate per-iteration metrics."""
+        self.total_loss += total_loss
+        self.classification_loss += classification_loss
+        # Weight accuracy by batch_size so different-sized batches don't skew it.
+        self.accuracy_weighted += accuracy * batch_size
+        self.iterations += 1
+        self.trials += batch_size
+
+    def finalize(self) -> EpochMetrics:
+        """Compute mean metrics across iterations."""
+        iters = max(self.iterations, 1)
+        trials = max(self.trials, 1)
+        return EpochMetrics(
+            total_loss=self.total_loss / iters,
+            classification_loss=self.classification_loss / iters,
+            accuracy=self.accuracy_weighted / trials,
+            num_iterations=self.iterations,
+            num_trials=self.trials,
+        )
+
+
+__all__ = ["EpochMetrics", "train_one_epoch", "validate"]

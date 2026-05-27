@@ -1,0 +1,60 @@
+# Milestone A — Logistic Regression tracer bullet on Synthetic_Easy.
+#
+# Exercises: data pipeline, classifier head, stratification, optimizer step,
+# save/resume, .mat output writer.
+#
+# Skips: encoder/decoder, VAE, curriculum, multi-head confidence, MIL.
+#
+# Compose on top of base.yaml: a sweep schema includes every field in base
+# even when this target overrides only a few — that field-symmetry is what
+# Critical Note #25 (stable-schema EncodingParameters.yaml) requires.
+
+defaults:
+  - /base
+  - _self_
+
+# ───────────────────────── Run identity ─────────────────────────
+epoch: Synthetic_Easy
+target: Dimension
+
+# ───────────────────────── Architecture (no encoder/decoder) ─────────────────────────
+model_name: "Logistic Regression"
+classifier_name: Logistic
+hidden_sizes: []
+classifier_hidden_size: []
+is_variational: false
+encoder_output_type: Deterministic
+loss_type_decoder: "None"          # classifier-only
+
+# ───────────────────────── Confidence / MIL disabled ─────────────────────────
+confidence_type: []
+multiple_instance_learning_type: "None"
+want_batch_correction: false
+
+# ───────────────────────── Loss weights ─────────────────────────
+weight_reconstruction: 0
+weight_kl: 0
+weight_classification: 1
+weight_confidence: 0
+weight_offset_and_scale: 0
+prior_proportion: 0
+
+# ───────────────────────── Training schedule ─────────────────────────
+optimizer: ADAM                    # → torch.optim.AdamW
+weighted_loss: Inverse
+gradient_clip_type: SubNetwork
+num_epochs_autoencoder: 0          # Stage 1 skipped
+num_epochs_full: 20                # Tracer-bullet defaults to a short run
+initial_learning_rate: 0.01
+mini_batch_size: 16
+dynamic_parameter_set: "No Dynamic Parameters"
+
+# ───────────────────────── Synthetic data parameters ─────────────────────────
+# (Defines the toy in-memory dataset that drives the tracer bullet.)
+synthetic_num_sessions: 4
+synthetic_trials_per_session: 64
+synthetic_num_samples: 50
+synthetic_num_features: 8
+synthetic_num_classes_per_dim: [3, 4]
+synthetic_signal_strength: 1.5
+synthetic_validation_fraction: 0.2
