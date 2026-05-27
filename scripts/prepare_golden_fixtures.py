@@ -29,6 +29,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -44,6 +45,14 @@ FIXTURE_ROOT = PIPELINE_ROOT / "tests" / "fixtures"
 def _ensure_matlab() -> str:
     """Locate the MATLAB executable; abort if unavailable.
 
+    Search order:
+
+    1. The ``MATLAB_EXECUTABLE`` environment variable, if set.
+    2. ``$PATH`` lookup for ``matlab``.
+    3. The standard macOS install location
+       ``/Applications/MATLAB_R*.app/bin/matlab`` (newest version wins).
+    4. The standard Linux install location ``/usr/local/MATLAB/R*/bin/matlab``.
+
     Returns
     -------
     str
@@ -52,19 +61,63 @@ def _ensure_matlab() -> str:
     Raises
     ------
     SystemExit
-        If MATLAB is not installed or not on ``$PATH``.
+        If MATLAB cannot be located anywhere on the system.
     """
-    matlab = shutil.which("matlab")
-    if matlab is None:
-        sys.exit(
-            "MATLAB not found on $PATH. Install MATLAB or add it to your "
-            "PATH, then re-run this script."
-        )
-    return matlab
+    # 1. Explicit override.
+    env_path = os.environ.get("MATLAB_EXECUTABLE")
+    if env_path:
+        if not Path(env_path).is_file():
+            sys.exit(
+                f"MATLAB_EXECUTABLE points to a missing file: {env_path}"
+            )
+        return env_path
+
+    # 2. PATH lookup.
+    on_path = shutil.which("matlab")
+    if on_path:
+        return on_path
+
+    # 3. macOS standard locations (newest version preferred).
+    mac_candidates = sorted(
+        Path("/Applications").glob("MATLAB_R*.app/bin/matlab"),
+        key=lambda p: p.parent.parent.name,  # MATLAB_R2025b > MATLAB_R2024b
+        reverse=True,
+    )
+    if mac_candidates:
+        return str(mac_candidates[0])
+
+    # 4. Linux standard location.
+    linux_candidates = sorted(
+        Path("/usr/local/MATLAB").glob("R*/bin/matlab"),
+        key=lambda p: p.parent.parent.name,
+        reverse=True,
+    )
+    if linux_candidates:
+        return str(linux_candidates[0])
+
+    sys.exit(
+        "MATLAB not found. Looked in:\n"
+        "  - $MATLAB_EXECUTABLE\n"
+        "  - $PATH\n"
+        "  - /Applications/MATLAB_R*.app/bin/matlab (macOS)\n"
+        "  - /usr/local/MATLAB/R*/bin/matlab (Linux)\n"
+        "Set MATLAB_EXECUTABLE to the absolute path of your matlab binary, "
+        "or add it to $PATH."
+    )
 
 
 def _run_matlab_batch(commands: str) -> None:
     """Run a sequence of MATLAB commands in batch mode.
+
+    The MATLAB working directory is set to the parent repo root so the
+    invoked scripts can resolve relative paths to ``Processing_Functions_cgg``
+    and the other sibling utility folders. Per-script ``addpath`` calls
+    handle their own dependencies.
+
+    On Apple Silicon, MATLAB's launcher script can misidentify the
+    architecture as ``maci64`` (Intel) when invoked from a non-interactive
+    Python subprocess. We work around this by wrapping the call in
+    ``arch -arm64`` when running on Darwin/arm64.
 
     Parameters
     ----------
@@ -72,17 +125,85 @@ def _run_matlab_batch(commands: str) -> None:
         MATLAB statements to execute (e.g. ``"addpath(...); doStuff(...);"``).
     """
     matlab = _ensure_matlab()
-    subprocess.run(
-        [matlab, "-batch", commands],
-        check=True,
-        cwd=str(MATLAB_SOURCE_ROOT),
-    )
+    cmd: list[str] = [matlab, "-batch", commands]
+
+    # Apple Silicon workaround: when the Python interpreter is itself
+    # running under Rosetta (common with MacPorts/x86_64 builds), the
+    # launcher script for MATLAB picks up the wrong ARCH from its
+    # parent process and looks for ``bin/maci64/`` instead of
+    # ``bin/maca64/``. We detect the *real* hardware arch via ``sysctl``
+    # rather than ``os.uname()`` (which Rosetta lies about) and prefix
+    # the call with ``arch -arm64`` to force the launcher into the
+    # right code path.
+    if sys.platform == "darwin" and _real_macos_arch_is_arm64():
+        cmd = ["arch", "-arm64", *cmd]
+
+    subprocess.run(cmd, check=True, cwd=str(REPO_ROOT))
+
+
+def _real_macos_arch_is_arm64() -> bool:
+    """Return ``True`` iff the *hardware* is Apple Silicon, ignoring Rosetta.
+
+    Uses ``sysctl hw.optional.arm64`` because ``os.uname().machine`` reports
+    ``x86_64`` for a Rosetta-translated Python — a misleading answer when
+    we need to know what the launcher's child processes will see natively.
+    """
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.optional.arm64"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+    return result.stdout.strip() == "1"
 
 
 def prepare_milestone_0() -> None:
-    """Generate minimal smoke fixtures (verifies the MATLAB toolchain works)."""
-    print("[Milestone 0] Smoke fixture preparation (stub).")
-    # TODO(implementer): once a MATLAB-side fixture-export function exists, call it here.
+    """Generate the Milestone-0 stratification reference fixture.
+
+    Runs ``scripts/generate_stratification_fixture.m`` in MATLAB batch mode.
+    The output is written to
+    ``tests/fixtures/reference_partitions/synthetic_easy_partition.mat``
+    and is consumed by ``tests/parity/test_stratification_parity.py``.
+
+    Raises
+    ------
+    SystemExit
+        If MATLAB is not on ``$PATH`` (handled by :func:`_ensure_matlab`).
+    subprocess.CalledProcessError
+        If the MATLAB script itself errors out.
+    """
+    print("[Milestone 0] Generating stratification reference fixture …")
+    script = PIPELINE_ROOT / "scripts" / "generate_stratification_fixture.m"
+    if not script.is_file():
+        sys.exit(f"Missing fixture-generator script: {script}")
+
+    expected_output = (
+        FIXTURE_ROOT
+        / "reference_partitions"
+        / "synthetic_easy_partition.mat"
+    )
+    expected_output.parent.mkdir(parents=True, exist_ok=True)
+
+    # The MATLAB script is a function file; we invoke it via -batch so MATLAB
+    # exits cleanly when done. The function adds the parent repo's MATLAB
+    # source folders to its own path; we just need to make sure MATLAB can
+    # find the function file itself, which we do with `cd` + `addpath`.
+    matlab_cmd = (
+        f"addpath('{script.parent}'); "
+        f"{script.stem}(); "
+        f"exit(0);"
+    )
+    _run_matlab_batch(matlab_cmd)
+
+    if not expected_output.is_file():
+        sys.exit(
+            f"MATLAB completed but the expected fixture was not produced: "
+            f"{expected_output}"
+        )
+    print(f"  ✓ Fixture saved: {expected_output}")
 
 
 def prepare_milestone_a() -> None:
