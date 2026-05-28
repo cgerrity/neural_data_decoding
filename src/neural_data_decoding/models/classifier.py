@@ -184,12 +184,214 @@ def build_logistic_classifier(cfg: Mapping[str, Any]) -> MultiHeadClassifier:
     )
 
 
-# Side-effect: register on import so importing this module makes 'Logistic'
-# discoverable through neural_data_decoding.models.registry.build_classifier.
+# ───────────────────────── Deep LSTM (per-dim trunks) ─────────────────────────
+
+
+class DeepLSTMClassifier(nn.Module):
+    """Multi-head LSTM classifier — separate LSTM stack per output dimension.
+
+    Mirrors ``cgg_selectClassifier::'Deep LSTM - Dropout 0.5'`` →
+    ``cgg_generateLayersForClassifier(NetworkType='LSTM', DropoutPercent=0.5)``.
+    For each output dimension ``d`` MATLAB builds an independent layer
+    graph::
+
+        [LSTM(H_1, seq) → Dropout]    \\
+        [LSTM(H_2, seq) → Dropout]     \\  one stack per dim
+        ...                             /
+        [LSTM(H_last, seq) → Dropout]  /
+        FC(NumClasses[d])
+        softmax (or cgg_softmaxLayer for MIL)
+
+    The Python equivalent uses ``nn.ModuleList`` of per-dim stacks. All
+    LSTMs keep the time dimension (``batch_first=True``, default
+    OutputMode='sequence'); the loss kernel reduces over time via
+    :func:`~neural_data_decoding.training.losses.classification.multi_head_cross_entropy`,
+    which handles ``(B, T, K)`` logits exactly the way MATLAB's
+    ``crossentropy(Y, T)`` does when ``T`` is broadcast across time.
+
+    The classifier returns **logits** (pre-softmax) per Critical Note: the
+    softmax → cross-entropy fusion happens in :func:`F.cross_entropy`.
+
+    Parameters
+    ----------
+    in_features
+        Last-axis size of the input tensor (the bottleneck's output dim).
+    num_classes_per_dim
+        Output classes per classification dimension. The classifier
+        produces one logit tensor per dim, each of shape
+        ``(batch, time, num_classes_d)``.
+    hidden_sizes
+        LSTM hidden sizes for the inner stack. Length determines depth.
+        Must be non-empty.
+    dropout
+        Dropout rate inserted after each LSTM in the stack. ``0.5`` for
+        ``'Deep LSTM - Dropout 0.5'``; ``0.25`` for the
+        ``'Deep LSTM - Dropout 0.25'`` variant.
+
+    Attributes
+    ----------
+    stacks : torch.nn.ModuleList
+        One :class:`_LSTMDimStack` per output dimension.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        num_classes_per_dim: Sequence[int],
+        *,
+        hidden_sizes: Sequence[int],
+        dropout: float = 0.5,
+    ) -> None:
+        super().__init__()
+        if in_features <= 0:
+            raise ValueError(f"in_features must be > 0; got {in_features}.")
+        if not num_classes_per_dim:
+            raise ValueError("num_classes_per_dim must be a non-empty sequence.")
+        if any(n <= 0 for n in num_classes_per_dim):
+            raise ValueError(
+                f"All entries of num_classes_per_dim must be > 0; "
+                f"got {list(num_classes_per_dim)}"
+            )
+        if not hidden_sizes:
+            raise ValueError("hidden_sizes must be non-empty for DeepLSTMClassifier.")
+        if not 0.0 <= dropout < 1.0:
+            raise ValueError(f"dropout must be in [0, 1); got {dropout}.")
+
+        self.in_features = in_features
+        self.num_classes_per_dim = tuple(int(n) for n in num_classes_per_dim)
+        self.hidden_sizes = tuple(int(h) for h in hidden_sizes)
+        self.dropout = dropout
+
+        self.stacks = nn.ModuleList(
+            [
+                _LSTMDimStack(
+                    in_features=in_features,
+                    hidden_sizes=self.hidden_sizes,
+                    dropout=dropout,
+                    num_classes=n,
+                )
+                for n in self.num_classes_per_dim
+            ]
+        )
+
+    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+        """Run each per-dim stack on the same input.
+
+        Parameters
+        ----------
+        x
+            Input tensor of shape ``(batch, time, in_features)``.
+
+        Returns
+        -------
+        list of torch.Tensor
+            One logit tensor per output dimension, each of shape
+            ``(batch, time, num_classes_d)``.
+        """
+        if x.shape[-1] != self.in_features:
+            raise ValueError(
+                f"Input last dim ({x.shape[-1]}) does not match "
+                f"in_features ({self.in_features})."
+            )
+        return [stack(x) for stack in self.stacks]
+
+
+class _LSTMDimStack(nn.Module):
+    """Single per-dimension LSTM stack + final FC head."""
+
+    def __init__(
+        self,
+        *,
+        in_features: int,
+        hidden_sizes: Sequence[int],
+        dropout: float,
+        num_classes: int,
+    ) -> None:
+        super().__init__()
+        self.lstms = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+        current = in_features
+        for h in hidden_sizes:
+            self.lstms.append(
+                nn.LSTM(input_size=current, hidden_size=h, batch_first=True)
+            )
+            self.dropouts.append(
+                nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+            )
+            current = h
+        self.head = nn.Linear(current, num_classes)
+        # MATLAB applies He init explicitly to FC layers; do the same here
+        # for parity with weight-load tests (Critical Note #31).
+        nn.init.kaiming_normal_(self.head.weight, nonlinearity="relu")
+        nn.init.zeros_(self.head.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply each LSTM (sequence mode) + dropout, then the per-timestep head."""
+        for lstm, drop in zip(self.lstms, self.dropouts):
+            x = lstm(x)[0]  # (B, T, H) — sequence output
+            x = drop(x)
+        return self.head(x)  # (B, T, num_classes)
+
+
+# ───────────────────────── Builders ─────────────────────────
+
+
+def build_deep_lstm_classifier(
+    cfg: Mapping[str, Any], *, dropout: float
+) -> DeepLSTMClassifier:
+    """Construct a Deep-LSTM classifier with a fixed dropout rate.
+
+    Used by the two registered MATLAB variants
+    (``'Deep LSTM - Dropout 0.5'``, ``'Deep LSTM - Dropout 0.25'``) which
+    are identical except for the dropout magnitude.
+
+    Required cfg keys
+    -----------------
+    ``in_features``
+    ``num_classes_per_dim``
+    ``classifier_hidden_size`` (Sequence[int])
+
+    Parameters
+    ----------
+    cfg
+        Resolved configuration mapping.
+    dropout
+        Hard-coded dropout rate (set by the registered builder).
+
+    Returns
+    -------
+    DeepLSTMClassifier
+    """
+    try:
+        in_features = int(cfg["in_features"])
+        num_classes_per_dim = list(cfg["num_classes_per_dim"])
+        hidden_sizes = list(cfg["classifier_hidden_size"])
+    except KeyError as exc:
+        raise KeyError(
+            f"build_deep_lstm_classifier: missing required cfg key {exc}"
+        ) from exc
+    return DeepLSTMClassifier(
+        in_features=in_features,
+        num_classes_per_dim=num_classes_per_dim,
+        hidden_sizes=hidden_sizes,
+        dropout=dropout,
+    )
+
+
+# Side-effect: register on import so importing this module makes the
+# classifier strings discoverable through registry.build_classifier.
 register_classifier("Logistic")(build_logistic_classifier)
+register_classifier("Deep LSTM - Dropout 0.5")(
+    lambda cfg: build_deep_lstm_classifier(cfg, dropout=0.5)
+)
+register_classifier("Deep LSTM - Dropout 0.25")(
+    lambda cfg: build_deep_lstm_classifier(cfg, dropout=0.25)
+)
 
 
 __all__ = [
+    "DeepLSTMClassifier",
     "MultiHeadClassifier",
+    "build_deep_lstm_classifier",
     "build_logistic_classifier",
 ]

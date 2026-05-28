@@ -37,7 +37,11 @@ from .interop import (
     write_cm_table_mat,
     write_encoding_parameters_yaml,
 )
+import neural_data_decoding.models  # noqa: F401 — triggers architecture registrations
+from .models.bottleneck import LinearBottleneck, PassthroughBottleneck
 from .models.classifier import MultiHeadClassifier
+from .models.composite import EncoderClassifierComposite
+from .models.registry import build_classifier, build_encoder
 from .training.checkpoint import has_existing_checkpoint
 from .training.lifecycle import fit_supervised
 from .training.losses.classification import inverse_frequency_class_weights
@@ -173,12 +177,16 @@ def _cmd_train(args: argparse.Namespace) -> int:
         collate_fn=collate_trials,
     )
 
-    # Logistic Regression for Milestone A: classifier consumes raw features
-    # directly with no encoder. in_features = num_features.
+    # Build the model. Milestone A's Logistic Regression has no encoder
+    # — the classifier consumes raw features directly. Milestone B's GRU
+    # path composes Encoder → Bottleneck → Classifier so the classifier
+    # sees the encoder's hidden representation.
     num_features = int(cfg.synthetic_num_features)
     num_classes_per_dim = list(cfg.synthetic_num_classes_per_dim)
-    model = MultiHeadClassifier(
-        in_features=num_features, num_classes_per_dim=num_classes_per_dim
+    model = _build_model(
+        cfg,
+        in_features=num_features,
+        num_classes_per_dim=num_classes_per_dim,
     )
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -245,6 +253,80 @@ def _load_config(name: str) -> DictConfig:
     merged = OmegaConf.merge(base, target)
     assert isinstance(merged, DictConfig)
     return merged
+
+
+def _build_model(
+    cfg: DictConfig,
+    *,
+    in_features: int,
+    num_classes_per_dim: list[int],
+) -> torch.nn.Module:
+    """Build the trainable model for the active milestone.
+
+    Three branches:
+
+    * ``model_name='Logistic Regression'`` — direct
+      :class:`MultiHeadClassifier`, no encoder. Milestone A.
+    * Any other ``model_name`` registered as an encoder — build
+      ``Encoder + Bottleneck + Classifier`` composite. Milestone B+.
+
+    Parameters
+    ----------
+    cfg
+        Resolved config.
+    in_features
+        Last-axis size of the input data (channel count).
+    num_classes_per_dim
+        Output classes per dimension.
+
+    Returns
+    -------
+    torch.nn.Module
+        The composed model — its ``forward(x)`` returns a list of per-dim
+        logit tensors regardless of which branch was taken.
+    """
+    model_name = str(cfg.model_name)
+
+    # Milestone A short-circuit — no encoder.
+    if model_name == "Logistic Regression":
+        return MultiHeadClassifier(
+            in_features=in_features,
+            num_classes_per_dim=num_classes_per_dim,
+        )
+
+    # Milestone B+ — composite Encoder + Bottleneck + Classifier.
+    encoder_cfg = {
+        "in_features": in_features,
+        "hidden_sizes": list(cfg.hidden_sizes),
+        "dropout": float(cfg.dropout),
+        "want_normalization": bool(cfg.want_normalization),
+        "activation": str(cfg.activation),
+    }
+    encoder = build_encoder(model_name, encoder_cfg)
+    encoder_out = getattr(encoder, "out_features", in_features)
+
+    # Bottleneck: for the tracer bullet, no extra FC — pass through.
+    # Milestone C will add the simple-block stack here when
+    # bottleneck_hidden_size is set.
+    bottleneck_hidden_size = cfg.get("bottleneck_hidden_size", None)
+    bottleneck = (
+        LinearBottleneck(
+            in_features=encoder_out, hidden_size=int(bottleneck_hidden_size)
+        )
+        if bottleneck_hidden_size
+        else PassthroughBottleneck(in_features=encoder_out)
+    )
+
+    classifier_cfg = {
+        "in_features": bottleneck.out_features,
+        "num_classes_per_dim": num_classes_per_dim,
+        "classifier_hidden_size": list(cfg.classifier_hidden_size),
+    }
+    classifier = build_classifier(str(cfg.classifier_name), classifier_cfg)
+
+    return EncoderClassifierComposite(
+        encoder=encoder, bottleneck=bottleneck, classifier=classifier
+    )
 
 
 def _resolve_result_dir(cfg: DictConfig, output_root: Path) -> Path:
@@ -315,7 +397,7 @@ def _print_epoch(history_entry: Any) -> None:
 
 
 def _write_validation_cm_table(
-    model: MultiHeadClassifier,
+    model: torch.nn.Module,
     val_ds: SyntheticTrialDataset,
     val_loader: DataLoader,
     result_dir: Path,

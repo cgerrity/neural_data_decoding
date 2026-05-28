@@ -1,0 +1,63 @@
+# Milestone B — GRU encoder + Deep LSTM classifier on Synthetic_Easy.
+#
+# Exercises: encoder dispatcher (Simple branch), RNN block builder,
+# session-balanced batching, classifier-only loss with the encoder
+# active. Stage 1 is still degenerate (no decoder); Stage 2 trains the
+# composed encoder + bottleneck + classifier.
+#
+# Skips: VAE sampling, KL annealing, confidence, MIL, dynamic curriculum.
+
+defaults:
+  - /base
+  - _self_
+
+# ───────────────────────── Run identity ─────────────────────────
+epoch: Synthetic_Easy
+target: Dimension
+
+# ───────────────────────── Architecture ─────────────────────────
+model_name: GRU
+classifier_name: "Deep LSTM - Dropout 0.5"
+hidden_sizes: [16, 8]              # Smaller than Optimal — synthetic-data scale.
+classifier_hidden_size: [16, 8]    # Same scale.
+is_variational: false
+encoder_output_type: Deterministic
+loss_type_decoder: "None"          # classifier-only
+
+# Encoder-block knobs — Milestone B mirrors the GRU production defaults
+# (no normalization, no activation; dropout off for the cleanest baseline).
+dropout: 0.0
+want_normalization: false
+activation: ""
+
+# ───────────────────────── Confidence / MIL disabled ─────────────────────────
+confidence_type: []
+multiple_instance_learning_type: "None"
+want_batch_correction: false
+
+# ───────────────────────── Loss weights ─────────────────────────
+weight_reconstruction: 0
+weight_kl: 0
+weight_classification: 1
+weight_confidence: 0
+weight_offset_and_scale: 0
+prior_proportion: 0
+
+# ───────────────────────── Training schedule ─────────────────────────
+optimizer: ADAM                    # → torch.optim.AdamW
+weighted_loss: Inverse
+gradient_clip_type: Global
+num_epochs_autoencoder: 0          # Stage 1 skipped
+num_epochs_full: 20                # Tracer-bullet short run
+initial_learning_rate: 0.005
+mini_batch_size: 16
+dynamic_parameter_set: "No Dynamic Parameters"
+
+# ───────────────────────── Synthetic data parameters ─────────────────────────
+synthetic_num_sessions: 4
+synthetic_trials_per_session: 64
+synthetic_num_samples: 30
+synthetic_num_features: 8
+synthetic_num_classes_per_dim: [3, 4]
+synthetic_signal_strength: 1.5
+synthetic_validation_fraction: 0.2
