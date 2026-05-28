@@ -37,6 +37,7 @@ from neural_data_decoding.interop.parameter_yaml import (
     write_encoding_parameters_yaml,
 )
 from neural_data_decoding.interop.weight_converter import (
+    load_matlab_composite_weights,
     load_matlab_gru_encoder_weights,
     load_matlab_lstm_encoder_weights,
     matlab_cbt_to_pytorch_btc,
@@ -51,6 +52,7 @@ __all__ = [
     "build_result_dir",
     "describe_table_mat",
     "find_matlab_executable",
+    "load_matlab_composite_weights",
     "load_matlab_gru_encoder_weights",
     "load_matlab_lstm_encoder_weights",
     "matlab_available",

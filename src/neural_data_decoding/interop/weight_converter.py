@@ -98,6 +98,130 @@ _MATLAB_LSTM_LAYER_PREFIX = "lstm_Encoder_"
 # and ``bias_hh = 0`` gives exact parity for all four gates.
 
 
+def _field_name(layer: str, param: str) -> str:
+    """Build the fixture struct field name for a (layer, param) pair.
+
+    Mirrors the MATLAB-side convention in the fixture-generator scripts:
+    ``"<layer>__<param>"`` with ``-`` replaced by ``_`` (the only
+    field-name-hostile character in our layer names, e.g.
+    ``LSTM_Dim_1_Layer-Out`` → ``LSTM_Dim_1_Layer_Out``).
+    """
+    return f"{layer}__{param}".replace("-", "_")
+
+
+def _assign_rnn_layer(
+    rnn: torch.nn.Module,
+    weights: Mapping[str, np.ndarray],
+    matlab_layer: str,
+    *,
+    gates: int,
+) -> None:
+    """Copy MATLAB RNN learnables into an ``nn.GRU`` / ``nn.LSTM`` layer.
+
+    Parameters
+    ----------
+    rnn
+        Target ``nn.GRU`` (``gates=3``) or ``nn.LSTM`` (``gates=4``).
+    weights
+        Flat ``{field: ndarray}`` dict from the fixture.
+    matlab_layer
+        MATLAB layer name (e.g. ``"gru_Encoder_1"``,
+        ``"LSTM_Dim_1_Layer-Out"``).
+    gates
+        3 for GRU, 4 for LSTM. Used for shape validation.
+
+    Raises
+    ------
+    KeyError
+        If any of the three learnables is missing.
+    ValueError
+        If a learnable shape doesn't match the module's expectation.
+    """
+    try:
+        w_input = np.asarray(
+            weights[_field_name(matlab_layer, "InputWeights")], dtype=np.float32
+        )
+        w_recur = np.asarray(
+            weights[_field_name(matlab_layer, "RecurrentWeights")], dtype=np.float32
+        )
+        bias = np.asarray(
+            weights[_field_name(matlab_layer, "Bias")], dtype=np.float32
+        ).ravel()
+    except KeyError as exc:
+        raise KeyError(
+            f"Fixture is missing weight tensor {exc} for layer {matlab_layer!r}."
+        ) from exc
+
+    expected = gates * rnn.hidden_size
+    if w_input.shape != (expected, rnn.input_size):
+        raise ValueError(
+            f"{matlab_layer} InputWeights shape {w_input.shape} != expected "
+            f"({expected}, {rnn.input_size})."
+        )
+    if w_recur.shape != (expected, rnn.hidden_size):
+        raise ValueError(
+            f"{matlab_layer} RecurrentWeights shape {w_recur.shape} != expected "
+            f"({expected}, {rnn.hidden_size})."
+        )
+    if bias.shape != (expected,):
+        raise ValueError(
+            f"{matlab_layer} Bias shape {bias.shape} != expected ({expected},)."
+        )
+
+    with torch.no_grad():
+        rnn.weight_ih_l0.copy_(torch.from_numpy(w_input))
+        rnn.weight_hh_l0.copy_(torch.from_numpy(w_recur))
+        rnn.bias_ih_l0.copy_(torch.from_numpy(bias))
+        rnn.bias_hh_l0.zero_()  # critical — see module docstring
+
+
+def _assign_linear_layer(
+    linear: torch.nn.Linear,
+    weights: Mapping[str, np.ndarray],
+    matlab_layer: str,
+) -> None:
+    """Copy a MATLAB ``fullyConnectedLayer``'s learnables into an ``nn.Linear``.
+
+    MATLAB ``fullyConnectedLayer`` exposes ``Weights`` of shape
+    ``(OutputSize, InputSize)`` and ``Bias`` of shape ``(OutputSize, 1)`` —
+    the same orientation as PyTorch's ``nn.Linear.weight`` ``(out, in)``
+    and ``nn.Linear.bias`` ``(out,)`` — so both copy across verbatim.
+
+    Raises
+    ------
+    KeyError
+        If ``Weights`` or ``Bias`` is missing.
+    ValueError
+        If a learnable shape doesn't match the module's expectation.
+    """
+    try:
+        weight = np.asarray(
+            weights[_field_name(matlab_layer, "Weights")], dtype=np.float32
+        )
+        bias = np.asarray(
+            weights[_field_name(matlab_layer, "Bias")], dtype=np.float32
+        ).ravel()
+    except KeyError as exc:
+        raise KeyError(
+            f"Fixture is missing FC learnable {exc} for layer {matlab_layer!r}."
+        ) from exc
+
+    if weight.shape != (linear.out_features, linear.in_features):
+        raise ValueError(
+            f"{matlab_layer} Weights shape {weight.shape} != expected "
+            f"({linear.out_features}, {linear.in_features})."
+        )
+    if bias.shape != (linear.out_features,):
+        raise ValueError(
+            f"{matlab_layer} Bias shape {bias.shape} != expected "
+            f"({linear.out_features},)."
+        )
+
+    with torch.no_grad():
+        linear.weight.copy_(torch.from_numpy(weight))
+        linear.bias.copy_(torch.from_numpy(bias))
+
+
 def load_matlab_gru_encoder_weights(
     fixture: Mapping[str, Any],
     encoder: SimpleSequenceEncoder,
@@ -138,7 +262,6 @@ def load_matlab_gru_encoder_weights(
         )
 
     weights = _coerce_weights_dict(fixture)
-
     for layer_idx, block in enumerate(encoder.blocks, start=1):
         gru = block.transform_layer
         if not isinstance(gru, torch.nn.GRU):
@@ -146,42 +269,9 @@ def load_matlab_gru_encoder_weights(
                 f"Expected nn.GRU at block index {layer_idx - 1}; "
                 f"got {type(gru).__name__}."
             )
-
-        prefix = f"{_MATLAB_GRU_LAYER_PREFIX}{layer_idx}__"
-        try:
-            w_input = np.asarray(weights[prefix + "InputWeights"], dtype=np.float32)
-            w_recur = np.asarray(weights[prefix + "RecurrentWeights"], dtype=np.float32)
-            bias = np.asarray(weights[prefix + "Bias"], dtype=np.float32).ravel()
-        except KeyError as exc:
-            raise KeyError(
-                f"Fixture is missing weight tensor {exc} for encoder block "
-                f"{layer_idx}."
-            ) from exc
-
-        expected_3h = 3 * gru.hidden_size
-        if w_input.shape != (expected_3h, gru.input_size):
-            raise ValueError(
-                f"Block {layer_idx} InputWeights shape {w_input.shape} does not "
-                f"match nn.GRU's weight_ih_l0 expected shape "
-                f"({expected_3h}, {gru.input_size})."
-            )
-        if w_recur.shape != (expected_3h, gru.hidden_size):
-            raise ValueError(
-                f"Block {layer_idx} RecurrentWeights shape {w_recur.shape} does "
-                f"not match nn.GRU's weight_hh_l0 expected shape "
-                f"({expected_3h}, {gru.hidden_size})."
-            )
-        if bias.shape != (expected_3h,):
-            raise ValueError(
-                f"Block {layer_idx} Bias shape {bias.shape} does not match "
-                f"expected ({expected_3h},)."
-            )
-
-        with torch.no_grad():
-            gru.weight_ih_l0.copy_(torch.from_numpy(w_input))
-            gru.weight_hh_l0.copy_(torch.from_numpy(w_recur))
-            gru.bias_ih_l0.copy_(torch.from_numpy(bias))
-            gru.bias_hh_l0.zero_()  # critical — see module docstring
+        _assign_rnn_layer(
+            gru, weights, f"{_MATLAB_GRU_LAYER_PREFIX}{layer_idx}", gates=3
+        )
 
 
 def load_matlab_lstm_encoder_weights(
@@ -221,7 +311,6 @@ def load_matlab_lstm_encoder_weights(
         )
 
     weights = _coerce_weights_dict(fixture)
-
     for layer_idx, block in enumerate(encoder.blocks, start=1):
         lstm = block.transform_layer
         if not isinstance(lstm, torch.nn.LSTM):
@@ -229,42 +318,99 @@ def load_matlab_lstm_encoder_weights(
                 f"Expected nn.LSTM at block index {layer_idx - 1}; "
                 f"got {type(lstm).__name__}."
             )
+        _assign_rnn_layer(
+            lstm, weights, f"{_MATLAB_LSTM_LAYER_PREFIX}{layer_idx}", gates=4
+        )
 
-        prefix = f"{_MATLAB_LSTM_LAYER_PREFIX}{layer_idx}__"
-        try:
-            w_input = np.asarray(weights[prefix + "InputWeights"], dtype=np.float32)
-            w_recur = np.asarray(weights[prefix + "RecurrentWeights"], dtype=np.float32)
-            bias = np.asarray(weights[prefix + "Bias"], dtype=np.float32).ravel()
-        except KeyError as exc:
-            raise KeyError(
-                f"Fixture is missing weight tensor {exc} for encoder block "
-                f"{layer_idx}."
-            ) from exc
 
-        expected_4h = 4 * lstm.hidden_size
-        if w_input.shape != (expected_4h, lstm.input_size):
-            raise ValueError(
-                f"Block {layer_idx} InputWeights shape {w_input.shape} does not "
-                f"match nn.LSTM's weight_ih_l0 expected shape "
-                f"({expected_4h}, {lstm.input_size})."
+def load_matlab_composite_weights(
+    fixture: Mapping[str, Any],
+    composite: Any,
+) -> None:
+    """Transplant a full Encoder + Bottleneck + Deep-LSTM-Classifier composite.
+
+    Walks an
+    :class:`~neural_data_decoding.models.composite.EncoderClassifierComposite`
+    and copies every MATLAB learnable into place:
+
+    * **Encoder** — ``gru_Encoder_{k}`` (or ``lstm_Encoder_{k}``) into each
+      ``encoder.blocks[k-1].transform_layer`` (GRU ``gates=3`` / LSTM
+      ``gates=4``).
+    * **Bottleneck** — ``fc_OUT_BottleNeck`` into ``bottleneck.linear``
+      when the bottleneck is a
+      :class:`~neural_data_decoding.models.bottleneck.LinearBottleneck`.
+      A :class:`~neural_data_decoding.models.bottleneck.PassthroughBottleneck`
+      has no learnables and is skipped.
+    * **Classifier** — for each output dimension ``d`` (1-indexed), the
+      per-dim LSTM stack ``LSTM_Dim_{d}_Layer-1`` …
+      ``LSTM_Dim_{d}_Layer-Out`` into
+      ``classifier.stacks[d-1].lstms[*]`` and the head ``fc_Dim_{d}`` into
+      ``classifier.stacks[d-1].head``.
+
+    The MATLAB classifier names the inner LSTM layers ``Layer-1`` …
+    ``Layer-{Depth-1}`` and the final one ``Layer-Out``; this function
+    reproduces that mapping so a stack of any depth lines up.
+
+    Parameters
+    ----------
+    fixture
+        ``scipy.io.loadmat`` output for the composite fixture, containing a
+        ``weights`` sub-struct.
+    composite
+        Target ``EncoderClassifierComposite``. Modified in place. Typed as
+        ``Any`` to avoid importing the composite (and pulling its deps)
+        into this interop module.
+
+    Raises
+    ------
+    KeyError
+        If any expected learnable is missing from the fixture.
+    ValueError
+        If a module's structure doesn't match the fixture's shapes.
+    """
+    weights = _coerce_weights_dict(fixture)
+
+    # --- Encoder ---
+    for layer_idx, block in enumerate(composite.encoder.blocks, start=1):
+        rnn = block.transform_layer
+        if isinstance(rnn, torch.nn.GRU):
+            _assign_rnn_layer(
+                rnn, weights, f"{_MATLAB_GRU_LAYER_PREFIX}{layer_idx}", gates=3
             )
-        if w_recur.shape != (expected_4h, lstm.hidden_size):
-            raise ValueError(
-                f"Block {layer_idx} RecurrentWeights shape {w_recur.shape} does "
-                f"not match nn.LSTM's weight_hh_l0 expected shape "
-                f"({expected_4h}, {lstm.hidden_size})."
+        elif isinstance(rnn, torch.nn.LSTM):
+            _assign_rnn_layer(
+                rnn, weights, f"{_MATLAB_LSTM_LAYER_PREFIX}{layer_idx}", gates=4
             )
-        if bias.shape != (expected_4h,):
+        else:
             raise ValueError(
-                f"Block {layer_idx} Bias shape {bias.shape} does not match "
-                f"expected ({expected_4h},)."
+                f"Composite encoder block {layer_idx - 1} has unsupported "
+                f"transform {type(rnn).__name__}; expected nn.GRU or nn.LSTM."
             )
 
-        with torch.no_grad():
-            lstm.weight_ih_l0.copy_(torch.from_numpy(w_input))
-            lstm.weight_hh_l0.copy_(torch.from_numpy(w_recur))
-            lstm.bias_ih_l0.copy_(torch.from_numpy(bias))
-            lstm.bias_hh_l0.zero_()
+    # --- Bottleneck (LinearBottleneck only; Passthrough has no weights) ---
+    bottleneck = composite.bottleneck
+    if hasattr(bottleneck, "linear") and isinstance(
+        bottleneck.linear, torch.nn.Linear
+    ):
+        _assign_linear_layer(bottleneck.linear, weights, "fc_OUT_BottleNeck")
+
+    # --- Classifier (per-dim LSTM stacks + FC heads) ---
+    classifier = composite.classifier
+    stacks = getattr(classifier, "stacks", None)
+    if stacks is None:
+        raise ValueError(
+            "load_matlab_composite_weights expects a DeepLSTMClassifier "
+            "(with per-dim `stacks`); got a classifier without that attribute."
+        )
+    for dim_idx, stack in enumerate(stacks, start=1):
+        num_lstms = len(stack.lstms)
+        for li, lstm in enumerate(stack.lstms):
+            if li < num_lstms - 1:
+                matlab_layer = f"LSTM_Dim_{dim_idx}_Layer-{li + 1}"
+            else:
+                matlab_layer = f"LSTM_Dim_{dim_idx}_Layer-Out"
+            _assign_rnn_layer(lstm, weights, matlab_layer, gates=4)
+        _assign_linear_layer(stack.head, weights, f"fc_Dim_{dim_idx}")
 
 
 def matlab_ctb_to_pytorch_btc(x: np.ndarray) -> np.ndarray:
@@ -355,6 +501,7 @@ def _coerce_weights_dict(fixture: Mapping[str, Any]) -> dict[str, np.ndarray]:
 
 
 __all__ = [
+    "load_matlab_composite_weights",
     "load_matlab_gru_encoder_weights",
     "load_matlab_lstm_encoder_weights",
     "matlab_cbt_to_pytorch_btc",
