@@ -28,12 +28,20 @@ from neural_data_decoding.interop.parameter_yaml import (
     read_encoding_parameters_yaml,
     write_encoding_parameters_yaml,
 )
+from neural_data_decoding.interop.weight_converter import (
+    load_matlab_gru_encoder_weights,
+    matlab_cbt_to_pytorch_btc,
+    matlab_ctb_to_pytorch_btc,
+)
 
 __all__ = [
     "ENCODING_PARAMETERS_FILENAME",
     "TRAINING_CM_TABLE_FILENAME",
     "VALIDATION_CM_TABLE_FILENAME",
     "build_result_dir",
+    "load_matlab_gru_encoder_weights",
+    "matlab_cbt_to_pytorch_btc",
+    "matlab_ctb_to_pytorch_btc",
     "promote_struct_to_table",
     "read_encoding_parameters_yaml",
     "write_cm_table_mat",
