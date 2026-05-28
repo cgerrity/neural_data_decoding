@@ -94,7 +94,11 @@ target-version = ["py310", "py311", "py312"]
 
 # ───────────────────────── Docstring coverage ─────────────────────────
 [tool.interrogate]
-ignore-init-method = false
+# Constructor parameters are documented in the *class* docstring's
+# Parameters section (the NumPy docstring convention), not in a separate
+# __init__ docstring — so __init__ is exempt. The class itself still
+# requires a docstring (ignore-module / class checks remain on).
+ignore-init-method = true
 ignore-init-module = true
 ignore-magic = false
 ignore-semiprivate = false
@@ -103,6 +107,9 @@ ignore-property-decorators = false
 ignore-module = false
 ignore-nested-functions = true
 ignore-setters = false
+# @overload typing stubs carry `...` bodies; the concrete implementation
+# they precede holds the real docstring, so the stubs are exempt.
+ignore-overloaded-functions = true
 fail-under = 100
 exclude = ["tests", "scripts", "docs", "notebooks"]
 ignore-regex = ["^get$", "^mock_.*", ".*BaseClass.*"]
