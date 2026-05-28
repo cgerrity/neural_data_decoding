@@ -1,1 +1,6 @@
-"""Custom PyTorch layers (VAE sampling, frozen PCA, MIL softmax)."""
+"""Custom PyTorch layers (VAE sampling, NaN handling, frozen PCA, MIL softmax)."""
+
+from neural_data_decoding.models.layers.nan_to_zero import NaNToZero
+from neural_data_decoding.models.layers.sampling import SamplingLayer
+
+__all__ = ["NaNToZero", "SamplingLayer"]
