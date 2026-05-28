@@ -287,10 +287,23 @@ def test_build_decoder_returns_noop_for_loss_type_none() -> None:
     assert isinstance(dec, NoopDecoder)
 
 
-def test_build_decoder_rejects_non_none_loss_type_until_milestone_c() -> None:
-    """Anything other than ``'None'`` raises until the full decoder lands."""
-    with pytest.raises(NotImplementedError, match="Milestone C"):
-        build_decoder({"loss_type_decoder": "MSE"})
+def test_build_decoder_mse_now_builds_real_decoder() -> None:
+    """Milestone C: a non-'None' decoder builds the real SimpleSequenceDecoder.
+
+    (Earlier this asserted NotImplementedError; the decoder is implemented
+    as of Milestone C, so it now constructs given the required keys.)
+    """
+    from neural_data_decoding.models.decoder import SimpleSequenceDecoder
+
+    dec = build_decoder(
+        {
+            "loss_type_decoder": "MSE",
+            "latent_size": 4,
+            "encoder_hidden_sizes": [8],
+            "output_features": 6,
+        }
+    )
+    assert isinstance(dec, SimpleSequenceDecoder)
 
 
 def test_composite_gradients_flow_through_all_three_subnetworks() -> None:
