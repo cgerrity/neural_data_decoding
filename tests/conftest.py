@@ -111,15 +111,22 @@ def seeded(request: pytest.FixtureRequest) -> int:
 
 
 def _matlab_available() -> bool:
-    """Return True iff the MATLAB executable is on the PATH.
+    """Return True iff a MATLAB executable can be located.
 
-    Some parity tests require MATLAB to regenerate fixtures or to validate
-    Python output against a live MATLAB call. Those tests are gated by the
+    Some parity tests drive MATLAB via ``matlab -batch`` (e.g. to verify
+    Python output loads as a native table). Those tests are gated by the
     ``needs_matlab`` marker; this helper backs that gate.
-    """
-    from shutil import which
 
-    return which("matlab") is not None or "MATLAB_HOME" in os.environ
+    Delegates to
+    :func:`neural_data_decoding.interop.matlab_runner.matlab_available`,
+    which searches ``$MATLAB_EXECUTABLE`` / ``$PATH`` / the standard
+    macOS + Linux install locations — not just ``$PATH`` — so MATLAB
+    installed in ``/Applications`` is found even when it isn't on the
+    shell path.
+    """
+    from neural_data_decoding.interop.matlab_runner import matlab_available
+
+    return matlab_available()
 
 
 def _gpu_available() -> bool:

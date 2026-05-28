@@ -7,27 +7,23 @@ loaded mat-object and works either way — but a few analysis scripts
 explicitly call ``istable`` / use table-specific methods. For those
 callsites we need an actual ``table`` class instance on disk.
 
-This module wraps `MATLAB Engine for Python <https://www.mathworks.com/help/matlab/matlab-engine-for-python.html>`_
-to do the promotion in-process. The flow is:
+This module drives MATLAB via :mod:`neural_data_decoding.interop.matlab_runner`
+(``matlab -batch`` as a subprocess) rather than the in-process MATLAB
+Engine for Python. The subprocess approach works regardless of the
+Python interpreter's architecture — important on Apple Silicon where a
+Rosetta-translated Python can't load the native ``matlab.engine``
+extension. The flow:
 
-1. Python writes the struct via :func:`~neural_data_decoding.interop.cm_table_format.write_cm_table_mat`.
-2. ``promote_struct_to_table(in_path, out_path)`` starts a MATLAB engine,
-   loads the struct, calls ``struct2table``, and saves the result with the
-   variable name ``CM_Table`` so MATLAB callsites see exactly what
-   ``cgg_saveValidationCMTable`` would have written.
+1. Python writes the struct via
+   :func:`~neural_data_decoding.interop.cm_table_format.write_cm_table_mat`.
+2. :func:`promote_struct_to_table` shells out to MATLAB, which loads the
+   struct, calls ``struct2table``, and re-saves under the variable name
+   ``CM_Table`` — exactly what ``cgg_saveValidationCMTable`` would have
+   written.
 
-This is the **hand-off** step — it's not on the training hot path. Calling
-it once at the end of a run (or once per sweep, batching all CM_Tables)
-keeps the per-iteration cost zero.
-
-The MATLAB engine is **optional**: importing this module does not require
-``matlab.engine``. The import is deferred to call time so the rest of the
-pipeline runs fine without it. Install with::
-
-    pip install matlabengine
-
-(See MathWorks docs for version-matching constraints — the engine wrapper
-version must match the installed MATLAB release.)
+This is the **hand-off** step — not on the training hot path. Call it
+once at the end of a run (or once per sweep, batching all CM_Tables via
+:func:`promote_structs_to_tables`) so MATLAB cold-start cost is amortized.
 
 Examples
 --------
@@ -41,20 +37,27 @@ Examples
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
-if TYPE_CHECKING:  # pragma: no cover
-    from matlab.engine import MatlabEngine
+from neural_data_decoding.interop.matlab_runner import (
+    quote_matlab_path,
+    run_matlab_batch,
+)
+
+
+_JSON_MARKER = "__NDD_JSON__"
 
 
 def promote_struct_to_table(
     struct_mat_path: Path,
     table_mat_path: Path,
     *,
-    engine: "MatlabEngine | None" = None,
+    timeout: float | None = 300.0,
 ) -> Path:
-    """Promote a struct-of-arrays ``.mat`` to a native MATLAB ``table`` ``.mat``.
+    """Promote one struct-of-arrays ``.mat`` to a native MATLAB ``table`` ``.mat``.
 
     Parameters
     ----------
@@ -65,13 +68,11 @@ def promote_struct_to_table(
         scalar struct.
     table_mat_path
         Where to write the promoted ``.mat``. Overwritten if it exists.
-        The output uses MATLAB v7.3 (HDF5) format so it matches the
-        format-on-disk of the original pipeline output.
-    engine
-        Optional pre-started MATLAB engine. Pass one in to batch many
-        promotions in a single MATLAB session (engine startup is the
-        dominant cost). If ``None``, a fresh engine is started and stopped
-        around this call.
+        Saved as MATLAB v7.3 (HDF5) to match the original pipeline
+        output format.
+    timeout
+        Seconds before the MATLAB call is killed. Defaults to 300 s
+        (generous — covers cold start + a small conversion).
 
     Returns
     -------
@@ -80,55 +81,161 @@ def promote_struct_to_table(
 
     Raises
     ------
-    ImportError
-        If ``matlab.engine`` is not installed.
+    neural_data_decoding.interop.matlab_runner.MatlabNotFoundError
+        If no MATLAB executable can be located.
     FileNotFoundError
         If ``struct_mat_path`` does not exist.
-    RuntimeError
-        If the MATLAB load/save fails or the loaded variable isn't a
-        scalar struct.
+    subprocess.CalledProcessError
+        If MATLAB errors (e.g. the loaded variable isn't a scalar struct).
     """
-    struct_mat_path = Path(struct_mat_path).resolve()
-    table_mat_path = Path(table_mat_path).resolve()
+    return promote_structs_to_tables(
+        [(struct_mat_path, table_mat_path)], timeout=timeout
+    )[0]
 
-    if not struct_mat_path.is_file():
-        raise FileNotFoundError(f"Input struct .mat not found: {struct_mat_path}")
-    table_mat_path.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        import matlab.engine  # noqa: F401  (deferred — only imported when called)
-    except ImportError as exc:  # pragma: no cover - environment-dependent
-        raise ImportError(
-            "matlab.engine is required for promote_struct_to_table. "
-            "Install via `pip install matlabengine` (MATLAB-version matched)."
-        ) from exc
+def promote_structs_to_tables(
+    pairs: Sequence[tuple[Path, Path]],
+    *,
+    timeout: float | None = 600.0,
+) -> list[Path]:
+    """Promote many struct ``.mat`` files to table ``.mat`` in one MATLAB session.
 
-    owned_engine = engine is None
-    if owned_engine:
-        import matlab.engine as _eng
+    Batching amortizes MATLAB's cold-start cost (~10–20 s) across all
+    conversions — important when a sweep produces hundreds of CM_Tables.
 
-        engine = _eng.start_matlab()
+    Parameters
+    ----------
+    pairs
+        Sequence of ``(struct_in_path, table_out_path)`` tuples.
+    timeout
+        Seconds before the MATLAB call is killed. Defaults to 600 s.
 
-    try:
-        # Build the MATLAB command. Quoted paths handle spaces — needed for the
-        # repo's "Neural Data Reading" parent directory.
-        cmd = (
-            f"payload = load('{struct_mat_path}'); "
+    Returns
+    -------
+    list of pathlib.Path
+        The output paths, in input order.
+
+    Raises
+    ------
+    FileNotFoundError
+        If any input path does not exist.
+    subprocess.CalledProcessError
+        If MATLAB errors on any conversion (the whole batch aborts).
+    """
+    resolved: list[tuple[Path, Path]] = []
+    for struct_in, table_out in pairs:
+        struct_in = Path(struct_in).resolve()
+        table_out = Path(table_out).resolve()
+        if not struct_in.is_file():
+            raise FileNotFoundError(f"Input struct .mat not found: {struct_in}")
+        table_out.parent.mkdir(parents=True, exist_ok=True)
+        resolved.append((struct_in, table_out))
+
+    # Build one MATLAB script that converts every pair. Each conversion
+    # asserts the loaded variable is a scalar struct before promoting.
+    statements: list[str] = []
+    for struct_in, table_out in resolved:
+        in_q = quote_matlab_path(struct_in)
+        out_q = quote_matlab_path(table_out)
+        statements.append(
+            f"payload = load({in_q}); "
+            "assert(isfield(payload, 'CM_Table'), "
+            "'Input .mat has no CM_Table variable.'); "
             "assert(isstruct(payload.CM_Table) && isscalar(payload.CM_Table), "
-            "'Loaded CM_Table must be a scalar struct.'); "
+            "'CM_Table must be a scalar struct.'); "
             "CM_Table = struct2table(payload.CM_Table); "
-            f"save('{table_mat_path}', 'CM_Table', '-v7.3');"
+            f"save({out_q}, 'CM_Table', '-v7.3'); "
+            "clear payload CM_Table;"
         )
-        engine.eval(cmd, nargout=0)
-    except Exception as exc:  # pragma: no cover - engine-dependent
+
+    run_matlab_batch(" ".join(statements), timeout=timeout)
+    return [table_out for _, table_out in resolved]
+
+
+def describe_table_mat(table_mat_path: Path, *, timeout: float | None = 300.0) -> dict[str, Any]:
+    """Return metadata about a ``CM_Table`` ``.mat`` by querying MATLAB.
+
+    Loads the file in MATLAB, inspects the ``CM_Table`` variable, and
+    returns whether it's a genuine ``table``, its column names, and its
+    row count. Used by the parity tests to verify that
+    :func:`promote_struct_to_table` produced a real table on disk (not
+    just a struct that happens to round-trip).
+
+    Parameters
+    ----------
+    table_mat_path
+        Path to a ``.mat`` containing a ``CM_Table`` variable.
+    timeout
+        Seconds before the MATLAB call is killed.
+
+    Returns
+    -------
+    dict
+        ``{"istable": bool, "variables": list[str], "num_rows": int}``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``table_mat_path`` does not exist.
+    RuntimeError
+        If MATLAB's output can't be parsed (no JSON marker found).
+    """
+    table_mat_path = Path(table_mat_path).resolve()
+    if not table_mat_path.is_file():
+        raise FileNotFoundError(f"Table .mat not found: {table_mat_path}")
+
+    path_q = quote_matlab_path(table_mat_path)
+    # Build a struct of metadata and print it as JSON between markers so
+    # we can robustly extract it from MATLAB's (possibly chatty) stdout.
+    commands = (
+        f"loaded = load({path_q}); "
+        "v = loaded.CM_Table; "
+        "info = struct(); "
+        "info.istable = istable(v); "
+        "if istable(v); "
+        "  info.variables = v.Properties.VariableNames; "
+        "  info.num_rows = height(v); "
+        "else; "
+        "  info.variables = {{}}; "
+        "  info.num_rows = 0; "
+        "end; "
+        f"fprintf('{_JSON_MARKER}%s{_JSON_MARKER}\\n', jsonencode(info));"
+    )
+    result = run_matlab_batch(commands, capture_output=True, timeout=timeout)
+    return _parse_marked_json(result.stdout)
+
+
+def _parse_marked_json(stdout: str) -> dict[str, Any]:
+    """Extract and parse the JSON blob between the ``__NDD_JSON__`` markers."""
+    start = stdout.find(_JSON_MARKER)
+    if start == -1:
         raise RuntimeError(
-            f"MATLAB engine failed to promote {struct_mat_path} → {table_mat_path}: {exc}"
-        ) from exc
-    finally:
-        if owned_engine:
-            engine.quit()
+            "Could not find JSON marker in MATLAB output. Raw stdout:\n"
+            f"{stdout}"
+        )
+    start += len(_JSON_MARKER)
+    end = stdout.find(_JSON_MARKER, start)
+    if end == -1:
+        raise RuntimeError(
+            "Found opening JSON marker but no closing marker. Raw stdout:\n"
+            f"{stdout}"
+        )
+    payload = stdout[start:end].strip()
+    parsed = json.loads(payload)
+    # MATLAB jsonencode emits a single string (not a 1-element list) for a
+    # cellstr of length 1; normalize variables to a list of str.
+    variables = parsed.get("variables", [])
+    if isinstance(variables, str):
+        variables = [variables]
+    return {
+        "istable": bool(parsed.get("istable", False)),
+        "variables": list(variables),
+        "num_rows": int(parsed.get("num_rows", 0)),
+    }
 
-    return table_mat_path
 
-
-__all__ = ["promote_struct_to_table"]
+__all__ = [
+    "describe_table_mat",
+    "promote_struct_to_table",
+    "promote_structs_to_tables",
+]

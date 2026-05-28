@@ -32,35 +32,27 @@ import torch
 
 from neural_data_decoding.interop.weight_converter import (
     load_matlab_gru_encoder_weights,
+    load_matlab_lstm_encoder_weights,
     matlab_cbt_to_pytorch_btc,
     matlab_ctb_to_pytorch_btc,
 )
 from neural_data_decoding.models.encoder import SimpleSequenceEncoder
 
 
-FIXTURE_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "fixtures"
-    / "golden_weights"
-    / "encoder_t2_gru_simple.mat"
+FIXTURE_DIR = (
+    Path(__file__).resolve().parent.parent / "fixtures" / "golden_weights"
 )
+FIXTURE_PATH = FIXTURE_DIR / "encoder_t2_gru_simple.mat"
+LSTM_FIXTURE_PATH = FIXTURE_DIR / "encoder_t2_lstm_simple.mat"
+
+
+_TRANSFORM_SPEC = {
+    "GRU": (FIXTURE_PATH, load_matlab_gru_encoder_weights, "gru_Encoder_"),
+    "LSTM": (LSTM_FIXTURE_PATH, load_matlab_lstm_encoder_weights, "lstm_Encoder_"),
+}
 
 
 # ───────────────────────── Fixture loading ─────────────────────────
-
-
-@pytest.fixture(scope="module")
-def loaded_fixture() -> dict:
-    """Load the MATLAB-generated fixture once per module run."""
-    if not FIXTURE_PATH.exists():
-        pytest.skip(
-            f"Fixture missing: {FIXTURE_PATH}. "
-            "Regenerate with: matlab -batch \"run('scripts/generate_t2_encoder_fixture.m')\""
-        )
-    raw = scipy.io.loadmat(
-        str(FIXTURE_PATH), struct_as_record=False, squeeze_me=False
-    )
-    return raw
 
 
 def _scalar(value) -> int:
@@ -68,22 +60,60 @@ def _scalar(value) -> int:
     return int(np.asarray(value).reshape(-1)[0])
 
 
-@pytest.fixture(scope="module")
-def encoder_from_fixture(loaded_fixture: dict) -> SimpleSequenceEncoder:
-    """Build a Python encoder matching the fixture's dimensions and load weights."""
-    in_features = _scalar(loaded_fixture["in_features"])
-    hidden_sizes = np.asarray(loaded_fixture["hidden_sizes"]).reshape(-1).tolist()
+def _load_fixture(transform: str) -> dict:
+    path, _, _ = _TRANSFORM_SPEC[transform]
+    if not path.exists():
+        script_name = (
+            "generate_t2_encoder_fixture.m"
+            if transform == "GRU"
+            else "generate_t2_encoder_fixture_lstm.m"
+        )
+        pytest.skip(
+            f"{transform} fixture missing: {path}. "
+            f"Regenerate with: matlab -batch \"run('scripts/{script_name}')\""
+        )
+    return scipy.io.loadmat(
+        str(path), struct_as_record=False, squeeze_me=False
+    )
+
+
+def _build_encoder_from_fixture(
+    fixture: dict, transform: str
+) -> SimpleSequenceEncoder:
+    in_features = _scalar(fixture["in_features"])
+    hidden_sizes = np.asarray(fixture["hidden_sizes"]).reshape(-1).tolist()
     encoder = SimpleSequenceEncoder(
         in_features=in_features,
         hidden_sizes=[int(h) for h in hidden_sizes],
-        transform="GRU",
+        transform=transform,
         dropout=0.0,
         want_normalization=False,
         activation="",
     )
-    load_matlab_gru_encoder_weights(loaded_fixture, encoder)
-    encoder.eval()  # no dropout / no train-mode side effects
+    _, loader, _ = _TRANSFORM_SPEC[transform]
+    loader(fixture, encoder)
+    encoder.eval()
     return encoder
+
+
+@pytest.fixture(scope="module", params=list(_TRANSFORM_SPEC.keys()))
+def transform(request: pytest.FixtureRequest) -> str:
+    """Run the whole module against each transform (GRU, LSTM)."""
+    return request.param
+
+
+@pytest.fixture(scope="module")
+def loaded_fixture(transform: str) -> dict:
+    """Load the MATLAB-generated fixture for the active transform."""
+    return _load_fixture(transform)
+
+
+@pytest.fixture(scope="module")
+def encoder_from_fixture(
+    loaded_fixture: dict, transform: str
+) -> SimpleSequenceEncoder:
+    """Build a Python encoder matching the fixture and load weights."""
+    return _build_encoder_from_fixture(loaded_fixture, transform)
 
 
 # ───────────────────────── Fixture sanity checks ─────────────────────────
@@ -104,7 +134,7 @@ def test_fixture_has_expected_layout(loaded_fixture: dict) -> None:
 
 
 def test_fixture_formats_are_ctb_and_cbt(loaded_fixture: dict) -> None:
-    """Input is CTB; output is CBT (as observed from the MATLAB script run)."""
+    """Input is CTB; output is CBT (as observed from MATLAB)."""
     in_fmt = "".join(c for c in str(loaded_fixture["input_format"][0]) if c.isalpha())
     out_fmt = "".join(c for c in str(loaded_fixture["output_format"][0]) if c.isalpha())
     assert in_fmt == "CTB"
@@ -115,29 +145,31 @@ def test_fixture_formats_are_ctb_and_cbt(loaded_fixture: dict) -> None:
 
 
 def test_weights_load_into_encoder_blocks(
-    encoder_from_fixture: SimpleSequenceEncoder, loaded_fixture: dict
+    encoder_from_fixture: SimpleSequenceEncoder,
+    loaded_fixture: dict,
+    transform: str,
 ) -> None:
-    """After loading, each block's nn.GRU has the same numbers MATLAB had."""
+    """Each block's RNN module has the same numbers MATLAB had."""
     weights_struct = loaded_fixture["weights"]
-    # scipy gives us a (1, 1) object array wrapping a mat_struct.
     record = weights_struct[0, 0]
+    _, _, prefix_base = _TRANSFORM_SPEC[transform]
     for layer_idx, block in enumerate(encoder_from_fixture.blocks, start=1):
-        gru = block.transform_layer
-        prefix = f"gru_Encoder_{layer_idx}__"
+        rnn = block.transform_layer
+        prefix = f"{prefix_base}{layer_idx}__"
         ml_input = np.asarray(getattr(record, prefix + "InputWeights"))
         ml_recur = np.asarray(getattr(record, prefix + "RecurrentWeights"))
         ml_bias = np.asarray(getattr(record, prefix + "Bias")).ravel()
         np.testing.assert_allclose(
-            gru.weight_ih_l0.detach().numpy(), ml_input, rtol=0, atol=0
+            rnn.weight_ih_l0.detach().numpy(), ml_input, rtol=0, atol=0
         )
         np.testing.assert_allclose(
-            gru.weight_hh_l0.detach().numpy(), ml_recur, rtol=0, atol=0
+            rnn.weight_hh_l0.detach().numpy(), ml_recur, rtol=0, atol=0
         )
         np.testing.assert_allclose(
-            gru.bias_ih_l0.detach().numpy(), ml_bias, rtol=0, atol=0
+            rnn.bias_ih_l0.detach().numpy(), ml_bias, rtol=0, atol=0
         )
         np.testing.assert_array_equal(
-            gru.bias_hh_l0.detach().numpy(), np.zeros_like(ml_bias)
+            rnn.bias_hh_l0.detach().numpy(), np.zeros_like(ml_bias)
         )
 
 
@@ -145,26 +177,21 @@ def test_weights_load_into_encoder_blocks(
 
 
 def test_forward_pass_matches_matlab_within_tolerance(
-    encoder_from_fixture: SimpleSequenceEncoder, loaded_fixture: dict
+    encoder_from_fixture: SimpleSequenceEncoder,
+    loaded_fixture: dict,
 ) -> None:
     """Python forward output matches MATLAB's predict() to fp32 precision."""
     x_ctb = np.asarray(loaded_fixture["input"], dtype=np.float32)
     expected_cbt = np.asarray(loaded_fixture["expected_output"], dtype=np.float32)
 
-    # Permute MATLAB (C, T, B) → PyTorch (B, T, C).
     x_btc = matlab_ctb_to_pytorch_btc(x_ctb)
     x_torch = torch.from_numpy(x_btc).float()
 
     with torch.no_grad():
         y_torch = encoder_from_fixture(x_torch).numpy()
 
-    # Permute MATLAB (C, B, T) → (B, T, C) so the shapes align with PyTorch.
     expected_btc = matlab_cbt_to_pytorch_btc(expected_cbt)
-
-    assert y_torch.shape == expected_btc.shape, (
-        f"Python output shape {y_torch.shape} does not match the permuted "
-        f"MATLAB shape {expected_btc.shape}."
-    )
+    assert y_torch.shape == expected_btc.shape
 
     np.testing.assert_allclose(
         y_torch,
@@ -182,14 +209,7 @@ def test_forward_pass_matches_matlab_within_tolerance(
 def test_forward_pass_per_layer_intermediate(
     encoder_from_fixture: SimpleSequenceEncoder, loaded_fixture: dict
 ) -> None:
-    """First-block output is well-defined and shape-consistent.
-
-    This is a regression-narrowing test: if the full-stack parity test
-    fails, the per-block one localises whether the discrepancy starts at
-    block 1 (encoder construction problem) or accumulates only deeper
-    (downstream wiring problem). We don't have a MATLAB-side per-block
-    output saved, so we just sanity-check shape + finiteness here.
-    """
+    """First-block output has the right shape and is finite."""
     x_ctb = np.asarray(loaded_fixture["input"], dtype=np.float32)
     x_torch = torch.from_numpy(matlab_ctb_to_pytorch_btc(x_ctb)).float()
 

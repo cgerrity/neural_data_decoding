@@ -20,8 +20,16 @@ from neural_data_decoding.interop.cm_table_format import (
     write_cm_table_mat,
 )
 from neural_data_decoding.interop.folder_hierarchy import build_result_dir
+from neural_data_decoding.interop.matlab_runner import (
+    MatlabNotFoundError,
+    find_matlab_executable,
+    matlab_available,
+    run_matlab_batch,
+)
 from neural_data_decoding.interop.matlab_table_writer import (
+    describe_table_mat,
     promote_struct_to_table,
+    promote_structs_to_tables,
 )
 from neural_data_decoding.interop.parameter_yaml import (
     ENCODING_PARAMETERS_FILENAME,
@@ -30,20 +38,28 @@ from neural_data_decoding.interop.parameter_yaml import (
 )
 from neural_data_decoding.interop.weight_converter import (
     load_matlab_gru_encoder_weights,
+    load_matlab_lstm_encoder_weights,
     matlab_cbt_to_pytorch_btc,
     matlab_ctb_to_pytorch_btc,
 )
 
 __all__ = [
     "ENCODING_PARAMETERS_FILENAME",
+    "MatlabNotFoundError",
     "TRAINING_CM_TABLE_FILENAME",
     "VALIDATION_CM_TABLE_FILENAME",
     "build_result_dir",
+    "describe_table_mat",
+    "find_matlab_executable",
     "load_matlab_gru_encoder_weights",
+    "load_matlab_lstm_encoder_weights",
+    "matlab_available",
     "matlab_cbt_to_pytorch_btc",
     "matlab_ctb_to_pytorch_btc",
     "promote_struct_to_table",
+    "promote_structs_to_tables",
     "read_encoding_parameters_yaml",
+    "run_matlab_batch",
     "write_cm_table_mat",
     "write_encoding_parameters_yaml",
 ]

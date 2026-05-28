@@ -80,6 +80,22 @@ from neural_data_decoding.models.encoder import SimpleSequenceEncoder
 
 
 _MATLAB_GRU_LAYER_PREFIX = "gru_Encoder_"  # cgg_generateSimpleBlock convention
+_MATLAB_LSTM_LAYER_PREFIX = "lstm_Encoder_"
+
+
+# LSTM gate-order note
+# --------------------
+# Both MATLAB ``lstmLayer`` and PyTorch ``nn.LSTM`` use gate order
+# ``[input, forget, cell-candidate, output]`` (i, f, g, o). Per
+# MathWorks docs: "The four matrices are concatenated vertically in the
+# following order: input gate, forget gate, cell candidate, output gate."
+# Per PyTorch docs: "the input weights w_ih_l[k] = (W_ii|W_if|W_ig|W_io)".
+# So InputWeights / RecurrentWeights copy straight across.
+#
+# LSTM has no reset-gate subtlety analogous to GRU's candidate-gate
+# multiplication, so the bias mapping is unambiguous: PyTorch's effective
+# per-gate bias is ``bias_ih + bias_hh``. Setting ``bias_ih = MATLAB Bias``
+# and ``bias_hh = 0`` gives exact parity for all four gates.
 
 
 def load_matlab_gru_encoder_weights(
@@ -166,6 +182,89 @@ def load_matlab_gru_encoder_weights(
             gru.weight_hh_l0.copy_(torch.from_numpy(w_recur))
             gru.bias_ih_l0.copy_(torch.from_numpy(bias))
             gru.bias_hh_l0.zero_()  # critical — see module docstring
+
+
+def load_matlab_lstm_encoder_weights(
+    fixture: Mapping[str, Any],
+    encoder: SimpleSequenceEncoder,
+) -> None:
+    """In-place transplant MATLAB lstmLayer weights into a Python encoder.
+
+    Sister function of :func:`load_matlab_gru_encoder_weights` for LSTM
+    stacks. Same gate ordering on both sides; ``bias_ih = MATLAB Bias``
+    and ``bias_hh = 0`` produces exact per-gate parity. See the module
+    docstring for the algebra.
+
+    Parameters
+    ----------
+    fixture
+        Mapping produced by ``scipy.io.loadmat`` on the LSTM fixture
+        ``.mat`` file. Expected to contain a ``weights`` sub-struct with
+        fields ``lstm_Encoder_{k}__InputWeights``, ``..__RecurrentWeights``,
+        ``..__Bias``.
+    encoder
+        Target :class:`SimpleSequenceEncoder` with ``transform='LSTM'``.
+        Modified in place.
+
+    Raises
+    ------
+    KeyError
+        If a weight tensor is missing for any LSTM layer.
+    ValueError
+        If the encoder's transform isn't ``'LSTM'`` or any LSTM
+        learnable shape doesn't match.
+    """
+    if encoder.transform != "LSTM":
+        raise ValueError(
+            f"Converter only supports LSTM encoders here; got transform="
+            f"{encoder.transform!r}."
+        )
+
+    weights = _coerce_weights_dict(fixture)
+
+    for layer_idx, block in enumerate(encoder.blocks, start=1):
+        lstm = block.transform_layer
+        if not isinstance(lstm, torch.nn.LSTM):
+            raise ValueError(
+                f"Expected nn.LSTM at block index {layer_idx - 1}; "
+                f"got {type(lstm).__name__}."
+            )
+
+        prefix = f"{_MATLAB_LSTM_LAYER_PREFIX}{layer_idx}__"
+        try:
+            w_input = np.asarray(weights[prefix + "InputWeights"], dtype=np.float32)
+            w_recur = np.asarray(weights[prefix + "RecurrentWeights"], dtype=np.float32)
+            bias = np.asarray(weights[prefix + "Bias"], dtype=np.float32).ravel()
+        except KeyError as exc:
+            raise KeyError(
+                f"Fixture is missing weight tensor {exc} for encoder block "
+                f"{layer_idx}."
+            ) from exc
+
+        expected_4h = 4 * lstm.hidden_size
+        if w_input.shape != (expected_4h, lstm.input_size):
+            raise ValueError(
+                f"Block {layer_idx} InputWeights shape {w_input.shape} does not "
+                f"match nn.LSTM's weight_ih_l0 expected shape "
+                f"({expected_4h}, {lstm.input_size})."
+            )
+        if w_recur.shape != (expected_4h, lstm.hidden_size):
+            raise ValueError(
+                f"Block {layer_idx} RecurrentWeights shape {w_recur.shape} does "
+                f"not match nn.LSTM's weight_hh_l0 expected shape "
+                f"({expected_4h}, {lstm.hidden_size})."
+            )
+        if bias.shape != (expected_4h,):
+            raise ValueError(
+                f"Block {layer_idx} Bias shape {bias.shape} does not match "
+                f"expected ({expected_4h},)."
+            )
+
+        with torch.no_grad():
+            lstm.weight_ih_l0.copy_(torch.from_numpy(w_input))
+            lstm.weight_hh_l0.copy_(torch.from_numpy(w_recur))
+            lstm.bias_ih_l0.copy_(torch.from_numpy(bias))
+            lstm.bias_hh_l0.zero_()
 
 
 def matlab_ctb_to_pytorch_btc(x: np.ndarray) -> np.ndarray:
@@ -257,6 +356,7 @@ def _coerce_weights_dict(fixture: Mapping[str, Any]) -> dict[str, np.ndarray]:
 
 __all__ = [
     "load_matlab_gru_encoder_weights",
+    "load_matlab_lstm_encoder_weights",
     "matlab_cbt_to_pytorch_btc",
     "matlab_ctb_to_pytorch_btc",
 ]

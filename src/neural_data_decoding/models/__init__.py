@@ -22,3 +22,4 @@ from . import encoder  # noqa: F401
 # makes consumer imports cleaner.
 from . import bottleneck  # noqa: F401
 from . import composite  # noqa: F401
+from . import decoder  # noqa: F401

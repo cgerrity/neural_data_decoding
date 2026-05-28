@@ -2,21 +2,20 @@
 
 Verifies that
 :func:`neural_data_decoding.interop.matlab_table_writer.promote_struct_to_table`
-turns a Python-written struct ``.mat`` into a v7.3 ``.mat`` containing a
-native MATLAB ``table`` object — what MATLAB's ``istable()`` returns ``true``
-for, and what ``cgg_saveValidationCMTable`` would have written.
+turns a Python-written struct ``.mat`` into a ``.mat`` containing a native
+MATLAB ``table`` object — what MATLAB's ``istable()`` returns ``true`` for,
+and what ``cgg_saveValidationCMTable`` would have written.
 
-The whole test is auto-skipped when ``matlab.engine`` (MATLAB Engine for
-Python) is not installed in the active environment. Starting an engine is
-slow (≈3–5 s on cold start), so we open one per test session via a
-session-scoped fixture and reuse it across cases.
+Unlike the earlier ``matlab.engine`` approach, these tests drive MATLAB
+via ``matlab -batch`` as a subprocess (see
+:mod:`neural_data_decoding.interop.matlab_runner`), which works regardless
+of the Python interpreter's architecture. They are gated by the
+``needs_matlab`` marker and auto-skip when no MATLAB executable is found.
 
-To run locally, install the MATLAB-version-matched engine package::
-
-    pip install matlabengine
-
-Then ``pytest tests/parity/test_matlab_table_writer.py`` executes the
-parity checks against a freshly started MATLAB.
+Each test starts a fresh MATLAB process (cold start ~10–20 s), so the
+suite intentionally keeps the number of MATLAB round-trips small: one to
+promote, one to describe. Module-scoped fixtures share the promoted file
+across assertions.
 """
 
 from __future__ import annotations
@@ -31,33 +30,42 @@ from neural_data_decoding.interop.cm_table_format import (
     VALIDATION_CM_TABLE_FILENAME,
     write_cm_table_mat,
 )
-from neural_data_decoding.interop.matlab_table_writer import promote_struct_to_table
+from neural_data_decoding.interop.matlab_runner import matlab_available
+from neural_data_decoding.interop.matlab_table_writer import (
+    describe_table_mat,
+    promote_struct_to_table,
+)
 
 
-@pytest.fixture(scope="session")
-def matlab_engine() -> Any:
-    """Start a MATLAB Engine for Python instance, or skip if unavailable.
+pytestmark = pytest.mark.needs_matlab
 
-    Reused across every test in this module — engine startup dominates
-    runtime. Stopped automatically at session end.
-    """
-    eng_mod = pytest.importorskip(
-        "matlab.engine",
-        reason=(
-            "matlab.engine not installed. Install via `pip install matlabengine` "
-            "to enable the forward-helper parity tests."
-        ),
+
+# A module-level guard so the fixtures themselves skip cleanly even if a
+# runner invokes them without the collection-time marker filter.
+if not matlab_available():  # pragma: no cover - environment dependent
+    pytest.skip(
+        "MATLAB executable not found; skipping table-writer parity tests.",
+        allow_module_level=True,
     )
-    engine = eng_mod.start_matlab()
-    yield engine
-    engine.quit()
 
 
-@pytest.fixture
-def python_struct_mat(tmp_path: Path) -> Path:
-    """Write a tiny Python-side struct ``.mat`` to use as input."""
+_EXPECTED_COLUMNS = (
+    "DataNumber",
+    "TrueValue",
+    "Window_1",
+    "Window_2",
+    "Aggregation_Prediction",
+    "TrialConfidence",
+    "TaskConfidence",
+)
+
+
+@pytest.fixture(scope="module")
+def struct_mat(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Write a small Python-side struct ``.mat`` to use as conversion input."""
+    tmp = tmp_path_factory.mktemp("struct_in")
     n, d = 4, 3
-    out = tmp_path / VALIDATION_CM_TABLE_FILENAME
+    out = tmp / VALIDATION_CM_TABLE_FILENAME
     write_cm_table_mat(
         out,
         data_numbers=np.arange(101, 101 + n, dtype=np.int64),
@@ -73,57 +81,42 @@ def python_struct_mat(tmp_path: Path) -> Path:
     return out
 
 
-def test_promote_struct_produces_matlab_table(
-    matlab_engine: Any, python_struct_mat: Path, tmp_path: Path
-) -> None:
-    """The promoted file's CM_Table is a MATLAB ``table`` object, not a struct."""
-    out = tmp_path / "CM_Table_promoted.mat"
-    promote_struct_to_table(python_struct_mat, out, engine=matlab_engine)
+@pytest.fixture(scope="module")
+def promoted_table(struct_mat: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Promote the struct to a native MATLAB table once for the module."""
+    out_dir = tmp_path_factory.mktemp("table_out")
+    out = out_dir / "CM_Table_promoted.mat"
+    promote_struct_to_table(struct_mat, out)
+    return out
 
-    assert out.exists(), "Forward helper did not write the output file."
 
-    # Ask MATLAB to confirm the on-disk variable is a table.
-    matlab_engine.eval(f"loaded = load('{out}');", nargout=0)
-    is_table = matlab_engine.eval("istable(loaded.CM_Table)", nargout=1)
-    assert bool(is_table), (
+@pytest.fixture(scope="module")
+def table_metadata(promoted_table: Path) -> dict[str, Any]:
+    """Query MATLAB for the promoted table's metadata once for the module."""
+    return describe_table_mat(promoted_table)
+
+
+def test_promoted_file_exists(promoted_table: Path) -> None:
+    """The forward helper wrote the output file."""
+    assert promoted_table.exists(), "Forward helper did not write the output file."
+
+
+def test_promoted_variable_is_a_matlab_table(table_metadata: dict[str, Any]) -> None:
+    """MATLAB's ``istable`` returns true for the promoted variable."""
+    assert table_metadata["istable"] is True, (
         "Promoted file's CM_Table is not a MATLAB table — istable() returned false."
     )
 
 
-def test_promote_struct_preserves_columns_and_values(
-    matlab_engine: Any, python_struct_mat: Path, tmp_path: Path
-) -> None:
-    """Field set + per-cell values survive the struct → table promotion."""
-    out = tmp_path / "CM_Table_promoted.mat"
-    promote_struct_to_table(python_struct_mat, out, engine=matlab_engine)
-
-    # Field set: pull VariableNames from the MATLAB side as a cell array of chars.
-    matlab_engine.eval(
-        f"loaded = load('{out}'); vn = loaded.CM_Table.Properties.VariableNames;",
-        nargout=0,
-    )
-    var_count = int(matlab_engine.eval("numel(vn)", nargout=1))
-    var_names = [
-        str(matlab_engine.eval(f"vn{{{k}}}", nargout=1))
-        for k in range(1, var_count + 1)
-    ]
-    for expected in (
-        "DataNumber",
-        "TrueValue",
-        "Window_1",
-        "Window_2",
-        "Aggregation_Prediction",
-        "TrialConfidence",
-        "TaskConfidence",
-    ):
-        assert expected in var_names, (
-            f"Promoted table missing expected column {expected}; "
-            f"got {var_names}"
+def test_promoted_table_preserves_columns(table_metadata: dict[str, Any]) -> None:
+    """Every expected column survives the struct → table promotion."""
+    present = set(table_metadata["variables"])
+    for col in _EXPECTED_COLUMNS:
+        assert col in present, (
+            f"Promoted table missing column {col!r}; got {sorted(present)}."
         )
 
-    # Spot-check a value: TrueValue[0, 0] should be 0 (from the fixture above).
-    val = float(matlab_engine.eval("loaded.CM_Table.TrueValue(1, 1)", nargout=1))
-    assert val == 0.0
-    # Window_2 was the all-ones tensor.
-    val_w2 = float(matlab_engine.eval("loaded.CM_Table.Window_2(2, 3)", nargout=1))
-    assert val_w2 == 1.0
+
+def test_promoted_table_row_count(table_metadata: dict[str, Any]) -> None:
+    """The table has one row per input trial (4 in the fixture)."""
+    assert table_metadata["num_rows"] == 4

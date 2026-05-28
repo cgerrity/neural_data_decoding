@@ -10,6 +10,7 @@ from neural_data_decoding.models.bottleneck import (
     PassthroughBottleneck,
     build_bottleneck,
 )
+from neural_data_decoding.models.decoder import NoopDecoder, build_decoder
 from neural_data_decoding.models.classifier import (
     DeepLSTMClassifier,
     MultiHeadClassifier,
@@ -268,6 +269,28 @@ def test_composite_with_linear_bottleneck() -> None:
     )
     outs = model(torch.zeros(2, 7, 5))
     assert outs[0].shape == (2, 7, 3)
+
+
+# ───────────────────────── Decoder stub ─────────────────────────
+
+
+def test_noop_decoder_returns_input_unchanged() -> None:
+    """The Milestone B stub is an identity transform."""
+    dec = NoopDecoder()
+    x = torch.randn(2, 5, 4)
+    assert torch.equal(dec(x), x)
+
+
+def test_build_decoder_returns_noop_for_loss_type_none() -> None:
+    """``loss_type_decoder='None'`` → :class:`NoopDecoder`."""
+    dec = build_decoder({"loss_type_decoder": "None"})
+    assert isinstance(dec, NoopDecoder)
+
+
+def test_build_decoder_rejects_non_none_loss_type_until_milestone_c() -> None:
+    """Anything other than ``'None'`` raises until the full decoder lands."""
+    with pytest.raises(NotImplementedError, match="Milestone C"):
+        build_decoder({"loss_type_decoder": "MSE"})
 
 
 def test_composite_gradients_flow_through_all_three_subnetworks() -> None:
