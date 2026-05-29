@@ -8,14 +8,14 @@ ephys data. Reproduces the active production path in modern PyTorch while writin
 > **Status: Milestone B complete; Milestone C (Full Optimal) in progress.**
 > Milestones 0 (foundation), A (logistic tracer), and B (GRU + classifier) are
 > done and runnable end-to-end on synthetic data, with single-step forward-pass
-> parity against MATLAB verified to ~1e-9. See
-> `../Plans/neural_data_decoding_plan.md` for the full migration plan, milestone
-> sequence, and the MATLAB quirks that must be preserved.
+> parity against MATLAB verified to ~1e-9. See [`docs/PLAN.md`](docs/PLAN.md)
+> for the full migration plan, milestone sequence, and the MATLAB quirks that
+> must be preserved.
 
 ## Quickstart
 
 ```bash
-cd "Neural Data Reading/neural_data_decoding"
+cd <path-to>/neural_data_decoding
 
 # Set up a Python environment (3.10+).
 python -m venv .venv
@@ -136,8 +136,8 @@ milestone completion above.
   introduces them; several are still stubs pending Milestone C+.
 - **Educational notebooks** (Milestone E): `notebooks/` — ~60 Jupyter notebooks
   taking a MATLAB programmer to expert Python/PyTorch fluency on this pipeline.
-- **Migration plan**: `../Plans/neural_data_decoding_plan.md` — the canonical spec
-  for this port, including the full list of MATLAB quirks that must be preserved.
+- **Migration plan**: [`docs/PLAN.md`](docs/PLAN.md) — the canonical spec for
+  this port, including the full list of MATLAB quirks that must be preserved.
 
 ## License
 

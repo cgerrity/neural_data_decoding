@@ -21,19 +21,10 @@
 clear; close all;
 
 % ───────────────────────── Path setup ─────────────────────────
-% Resolve the parent repo root and add the MATLAB pipeline's path tree.
-thisDir   = fileparts(mfilename('fullpath'));
-projDir   = fullfile(thisDir, '..');        % neural_data_decoding/
-parentDir = fullfile(projDir, '..');        % Neural Data Reading/
-
-for sub = {'Processing_Functions_cgg', 'FLU_Process_scripts_LT', ...
-           'LoopUtil', 'exp-utils-cjt-4', 'External_Functions', ...
-           'YAMLMatlab_0.4.3'}
-    p = fullfile(parentDir, sub{1});
-    if isfolder(p)
-        addpath(genpath(p));
-    end
-end
+addpath(fileparts(mfilename('fullpath')));   % put ndd_add_matlab_paths on path
+ndd_add_matlab_paths();
+thisDir = fileparts(mfilename('fullpath'));
+projDir = fullfile(thisDir, '..');           % neural_data_decoding/
 
 % ───────────────────────── Test configuration ─────────────────────────
 InFeatures   = 3;

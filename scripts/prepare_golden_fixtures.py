@@ -36,11 +36,19 @@ from neural_data_decoding.interop.matlab_runner import (
     MatlabNotFoundError,
     run_matlab_batch,
 )
+from neural_data_decoding.utils.matlab_source import (
+    MatlabSourceNotFoundError,
+    find_matlab_source_root,
+)
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]   # …/Neural Data Reading/
-PIPELINE_ROOT = REPO_ROOT / "neural_data_decoding"
-MATLAB_SOURCE_ROOT = REPO_ROOT / "Processing_Functions_cgg"
+PIPELINE_ROOT = Path(__file__).resolve().parents[1]   # …/neural_data_decoding/
+try:
+    MATLAB_REPO_ROOT = find_matlab_source_root()
+except MatlabSourceNotFoundError:
+    # Tolerate startup without MATLAB sources — only fixture-generation steps need them.
+    MATLAB_REPO_ROOT = PIPELINE_ROOT.parent
+MATLAB_SOURCE_ROOT = MATLAB_REPO_ROOT / "Processing_Functions_cgg"
 FIXTURE_ROOT = PIPELINE_ROOT / "tests" / "fixtures"
 
 
@@ -60,7 +68,7 @@ def _run_matlab_batch(commands: str) -> None:
         MATLAB statements to execute (e.g. ``"addpath(...); doStuff(...);"``).
     """
     try:
-        run_matlab_batch(commands, cwd=REPO_ROOT)
+        run_matlab_batch(commands, cwd=MATLAB_REPO_ROOT)
     except MatlabNotFoundError as exc:
         sys.exit(str(exc))
 

@@ -8,8 +8,8 @@ Python port of the MATLAB neural decoding pipeline.
     forward-pass parity against MATLAB verified to ~1e-9. Milestone C (the full
     Optimal VAE path) is underway. Several concept and cookbook pages below are
     still stubs — they are authored alongside the code milestone that introduces
-    them. See the migration plan at `../../Plans/neural_data_decoding_plan.md`
-    for the full roadmap.
+    them. See `docs/PLAN.md` (at the project root, parallel to this
+    narrative tree) for the full migration roadmap.
 
 ## What this pipeline does
 

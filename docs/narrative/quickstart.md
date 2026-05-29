@@ -6,7 +6,7 @@ data or MATLAB install required.
 ## Install
 
 ```bash
-cd "Neural Data Reading/neural_data_decoding"
+cd <path-to>/neural_data_decoding
 
 python -m venv .venv
 source .venv/bin/activate            # macOS / Linux

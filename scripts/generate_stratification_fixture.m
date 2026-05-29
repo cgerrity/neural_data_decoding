@@ -15,31 +15,11 @@ function generate_stratification_fixture()
 %   IdentifierTable + AllSplitNames + NumFolds) must equal the saved
 %   PartitionGroups vector trial-for-trial.
 
-%% Resolve paths
-script_dir  = fileparts(mfilename('fullpath'));
-repo_root   = fileparts(script_dir);
-parent_repo = fileparts(repo_root);
-
-% The MATLAB pipeline relies on several sibling utility folders living
-% next to Processing_Functions_cgg (CheckVararginPairs, LoopUtil helpers,
-% YAML I/O, etc.). Add every relevant utility tree to the path.
-required_paths = {
-    'Processing_Functions_cgg', ...
-    'FLU_Process_scripts_LT', ...
-    'LoopUtil', ...
-    'exp-utils-cjt-4', ...
-    'External_Functions', ...
-    'YAMLMatlab_0.4.3'
-};
-
-for k = 1:numel(required_paths)
-    candidate = fullfile(parent_repo, required_paths{k});
-    if ~isfolder(candidate)
-        error('generate_stratification_fixture:dep_not_found', ...
-            'Required MATLAB dependency not found: %s', candidate);
-    end
-    addpath(genpath(candidate));
-end
+%% Resolve paths via the shared helper (respects NDD_MATLAB_SOURCE_ROOT).
+script_dir = fileparts(mfilename('fullpath'));
+repo_root  = fileparts(script_dir);
+addpath(script_dir);
+ndd_add_matlab_paths();
 
 %% Reproducible synthetic identifier table
 % A small, hand-shaped dataset that exercises both the "maintain" branch

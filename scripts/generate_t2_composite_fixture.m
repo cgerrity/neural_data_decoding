@@ -21,14 +21,10 @@
 clear; close all;
 
 % ───────────────────────── Path setup ─────────────────────────
-thisDir   = fileparts(mfilename('fullpath'));
-projDir   = fullfile(thisDir, '..');
-parentDir = fullfile(projDir, '..');
-for sub = {'Processing_Functions_cgg','FLU_Process_scripts_LT', ...
-           'LoopUtil','exp-utils-cjt-4','External_Functions','YAMLMatlab_0.4.3'}
-    p = fullfile(parentDir, sub{1});
-    if isfolder(p); addpath(genpath(p)); end
-end
+addpath(fileparts(mfilename('fullpath')));   % put ndd_add_matlab_paths on path
+ndd_add_matlab_paths();
+thisDir = fileparts(mfilename('fullpath'));
+projDir = fullfile(thisDir, '..');
 
 % ───────────────────────── Configuration ─────────────────────────
 InFeatures           = 3;
