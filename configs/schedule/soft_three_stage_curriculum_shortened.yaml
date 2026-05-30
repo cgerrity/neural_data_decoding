@@ -1,0 +1,48 @@
+# Soft Three-Stage Curriculum - Shortened
+#
+# Direct port of the MATLAB regime
+# `PARAMETERS_cgg_selectDynamicParameters('Soft Three-Stage Curriculum - Shortened')`.
+# Defines the waypoints (epoch_points + magnitude_points) for the three
+# schedules; the base values come from the training config and are
+# multiplied by the per-epoch magnitudes at consumption time.
+#
+# Regime description:
+#   First: Train AE mostly (Classifier mostly frozen).
+#   Second: Mostly freeze AE, train Classifier mostly.
+#   Curriculum: clean data → noise/offsets → noise removed →
+#               all components train for classification on easy data.
+
+matlab_name: "Soft Three-Stage Curriculum - Shortened"
+
+weights:
+  classification:
+    epoch_points: [0, 10, 15]
+    magnitude_points: [1.0e-2, 1.0e-2, 1.0]
+  confidence:
+    epoch_points: [0, 10, 15]
+    magnitude_points: [1.0e-2, 1.0e-2, 1.0]
+  reconstruction:
+    epoch_points: [20, 30]
+    magnitude_points: [1.0, 1.0e-2]
+  kl:
+    epoch_points: [20, 30]
+    magnitude_points: [1.0, 1.0e-2]
+
+freeze:
+  encoder:
+    epoch_points: [20, 25, 45, 46]
+    magnitude_points: [1.0, 1.0e-2, 1.0e-2, 1.0]
+  decoder:
+    epoch_points: [20, 25, 45, 46]
+    magnitude_points: [1.0, 1.0e-2, 1.0e-2, 1.0]
+  classifier:
+    epoch_points: [0, 10, 15]
+    magnitude_points: [1.0e-2, 1.0e-2, 1.0]
+
+# Flat (shared) augmentation: one schedule applies uniformly to every
+# std_* parameter the LoadSchedule manages. Mirrors the MATLAB form
+# where DynamicAugmentation.{EpochPoints,MagnitudePoints} sit at the
+# top level (vs. per-parameter nesting under DynamicAugmentation.<Name>).
+augmentation:
+  epoch_points: [5, 10, 25, 45]
+  magnitude_points: [1.0e-2, 1.0, 1.0, 1.0e-2]

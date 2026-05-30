@@ -1,0 +1,11 @@
+# No Dynamic Parameters — alias for the baseline (no schedules).
+#
+# MATLAB distinguishes 'No Dynamic Parameters' from 'None' only by
+# description (the former is "specifically for comparing to dynamic
+# sets that change"). The schedule data is identical to None.
+
+matlab_name: "No Dynamic Parameters"
+
+weights: {}
+freeze: {}
+augmentation: {}

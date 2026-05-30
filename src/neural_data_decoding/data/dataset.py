@@ -40,6 +40,9 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from neural_data_decoding.data.augmentation import additive_augmentation_signal
+from neural_data_decoding.training.schedules import Schedule
+
 
 @dataclass(frozen=True, slots=True)
 class TrialSample:
@@ -100,6 +103,25 @@ class SyntheticTrialDataset(Dataset):
         Standard deviation of the Gaussian noise added to every sample.
     seed
         RNG seed for reproducible dataset generation.
+    load_schedule
+        Optional :class:`~neural_data_decoding.training.schedules.Schedule`
+        whose ``std_channel_offset`` / ``std_white_noise`` /
+        ``std_random_walk`` parameters drive per-trial additive
+        augmentation. Magnitudes are read **live** in :meth:`__getitem__`
+        each call — never snapshot — so the training loop's
+        ``schedule.update(epoch)`` is reflected on the next batch
+        without rebuilding the dataset (Critical Note #8). Default
+        ``None`` disables augmentation entirely (legacy behavior).
+    augmentation_seed
+        RNG seed for the per-call augmentation draws. Independent of
+        ``seed`` so the dataset's fixed signal is reproducible even
+        when the augmentation stream is re-seeded.
+
+    Notes
+    -----
+    Time-shift augmentation is not exercised here because synthetic
+    trials are not windowed from a longer source signal; that path
+    lives in the (future) real-data ``MatFileTrialDataset``.
     """
 
     def __init__(
@@ -113,6 +135,8 @@ class SyntheticTrialDataset(Dataset):
         signal_strength: float = 1.0,
         noise_std: float = 0.5,
         seed: int = 0,
+        load_schedule: Schedule | None = None,
+        augmentation_seed: int = 0,
     ) -> None:
         if num_sessions <= 0 or trials_per_session <= 0:
             raise ValueError("num_sessions and trials_per_session must be > 0.")
@@ -170,6 +194,13 @@ class SyntheticTrialDataset(Dataset):
             np.arange(num_sessions, dtype=np.int64), trials_per_session
         )
 
+        # Augmentation: held as a *reference* (not snapshot) so live
+        # updates to schedule.current(name) are picked up immediately
+        # on the next __getitem__ call. Critical Note #8 (live-read at
+        # __getitem__, not snapshot per epoch).
+        self.load_schedule = load_schedule
+        self._aug_rng = np.random.default_rng(augmentation_seed)
+
     @property
     def session_ids(self) -> np.ndarray:
         """Per-trial session identifier — consumed by SingleSessionBatchSampler."""
@@ -207,13 +238,49 @@ class SyntheticTrialDataset(Dataset):
         if idx < 0 or idx >= len(self):
             raise IndexError(f"Trial index {idx} out of range [0, {len(self)}).")
 
-        features = torch.from_numpy(self._features[idx]).float()
+        features_np = self._features[idx]  # (num_samples, num_features)
+        if self.load_schedule is not None:
+            features_np = self._apply_augmentation(features_np)
+        features = torch.from_numpy(np.ascontiguousarray(features_np)).float()
         targets = torch.from_numpy(self._labels[idx]).long()
         metadata = {
             "session_id": int(self._session_ids[idx]),
             "trial_id": int(idx),
         }
         return features, targets, metadata
+
+    def _apply_augmentation(self, features_np: np.ndarray) -> np.ndarray:
+        """Add a live-read augmentation tensor to a single trial's features.
+
+        Reads magnitudes from :attr:`load_schedule` **at call time** so
+        the training loop's per-epoch ``schedule.update`` is reflected
+        on the very next batch (Critical Note #8). The augmentation kernel
+        expects ``(num_channels, num_samples, num_probes)``; the synthetic
+        dataset is single-probe, so we transpose ``(num_samples,
+        num_features)`` → ``(num_features, num_samples, 1)``, augment, and
+        transpose back.
+
+        A schedule that lacks a particular ``std_*`` key contributes 0
+        for that augmentation component (matches MATLAB's NaN-disable).
+        """
+        assert self.load_schedule is not None  # noqa: S101 — guarded by caller
+        sched = self.load_schedule
+
+        def _current_or_none(name: str) -> float | None:
+            return sched.current(name) if name in sched else None
+
+        ch_in = features_np.shape[1]
+        n_samp = features_np.shape[0]
+        signal = additive_augmentation_signal(
+            shape=(ch_in, n_samp, 1),
+            std_channel_offset=_current_or_none("std_channel_offset"),
+            std_white_noise=_current_or_none("std_white_noise"),
+            std_random_walk=_current_or_none("std_random_walk"),
+            rng=self._aug_rng,
+        )
+        # Convert (channels, samples, 1) → (samples, features) and add.
+        per_sample_noise = signal[:, :, 0].T  # (n_samp, ch_in)
+        return features_np.astype(np.float32) + per_sample_noise.astype(np.float32)
 
 
 def collate_trials(

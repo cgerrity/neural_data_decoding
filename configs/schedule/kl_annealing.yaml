@@ -1,0 +1,12 @@
+# KL Annealing — beta-VAE style KL weight ramp.
+#
+# Direct port of MATLAB's `PARAMETERS_cgg_selectDynamicParameters('KL Annealing')`.
+# KL weight starts near 0 and ramps up to 1 between epochs 10 and 100 to
+# prevent posterior collapse.
+
+matlab_name: "KL Annealing"
+
+weights:
+  kl:
+    epoch_points: [10, 100]
+    magnitude_points: [1.0e-4, 1.0]

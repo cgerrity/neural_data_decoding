@@ -44,9 +44,14 @@ from .models.classifier import MultiHeadClassifier
 from .models.composite import EncoderClassifierComposite, build_variational_composite
 from .models.registry import build_classifier, build_encoder
 from .training.checkpoint import has_existing_checkpoint
+from .training.freezing import build_optimizer_with_module_groups
 from .training.lifecycle import EpochHistory, fit_supervised
 from .training.losses.multi_objective import LossPriors
 from .training.losses.classification import inverse_frequency_class_weights
+from .training.schedules import (
+    CurriculumBundle,
+    load_curriculum_by_name,
+)
 
 
 CONFIG_ROOT = Path(__file__).resolve().parent.parent.parent / "configs"
@@ -168,8 +173,17 @@ def _cmd_train(args: argparse.Namespace) -> int:
         schema_template=schema,
     )
 
+    # Curriculum (Milestone C #5) — load the named regime preset from
+    # configs/schedule/ if the config asks for one. Defaults to "None"
+    # (no schedules), which keeps every parameter at its base value.
+    curriculum = _build_curriculum(cfg)
+
     # Build the synthetic datasets (train/val/test), model, optimizer, then fit.
-    train_ds, val_ds, test_ds = _build_synthetic_split(cfg)
+    # Only the training dataset receives the load schedule — val/test stay
+    # un-augmented so the metrics reflect the model, not the augmentation.
+    train_ds, val_ds, test_ds = _build_synthetic_split(
+        cfg, train_load_schedule=curriculum.load if curriculum is not None else None,
+    )
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg.mini_batch_size),
@@ -200,11 +214,11 @@ def _cmd_train(args: argparse.Namespace) -> int:
         in_features=num_features,
         num_classes_per_dim=num_classes_per_dim,
     )
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=float(cfg.initial_learning_rate),
-        weight_decay=float(cfg.l2_factor),
-    )
+    # Optimizer: when a freeze schedule is active, build per-module param
+    # groups so apply_freeze_to_optimizer can scale each network's lr
+    # independently (mirrors MATLAB setLearnRateFactor per submodule).
+    # Without a freeze schedule, a single group keeps existing behavior.
+    optimizer = _build_optimizer(cfg, model, curriculum)
 
     train_labels = torch.from_numpy(train_ds._labels).long()  # noqa: SLF001
     class_weights = (
@@ -246,6 +260,12 @@ def _cmd_train(args: argparse.Namespace) -> int:
             "CM_Table_Validation.mat + CM_Table.mat updated."
         )
 
+    epoch_cb = (
+        _make_print_epoch_with_curriculum(curriculum)
+        if curriculum is not None
+        else _print_epoch
+    )
+
     history = fit_supervised(
         model=model,
         train_loader=train_loader,
@@ -257,10 +277,13 @@ def _cmd_train(args: argparse.Namespace) -> int:
         checkpoint_dir=result_dir,
         class_weights_per_dim=class_weights,
         grad_clip_norm=float(cfg.gradient_threshold),
-        epoch_callback=_print_epoch,
+        epoch_callback=epoch_cb,
         on_optimal_callback=_on_optimal,
         loss_priors=initial_priors,
         prior_proportion=float(cfg.get("prior_proportion", 0.9)),
+        curriculum=curriculum,
+        freeze_base_lr=float(cfg.initial_learning_rate),
+        rescale_loss_epoch=int(cfg.get("rescale_loss_epoch", 0)),
     )
 
     final_val_acc = history[-1].val.accuracy if history and history[-1].val else None
@@ -415,6 +438,8 @@ def _resolve_result_dir(cfg: DictConfig, output_root: Path) -> Path:
 
 def _build_synthetic_split(
     cfg: DictConfig,
+    *,
+    train_load_schedule: Optional[Any] = None,
 ) -> tuple[SyntheticTrialDataset, SyntheticTrialDataset, SyntheticTrialDataset]:
     """Build a (train, val, test) triple of :class:`SyntheticTrialDataset`.
 
@@ -441,6 +466,8 @@ def _build_synthetic_split(
         num_classes_per_dim=list(cfg.synthetic_num_classes_per_dim),
         signal_strength=float(cfg.synthetic_signal_strength),
         seed=fold_seed,
+        load_schedule=train_load_schedule,
+        augmentation_seed=fold_seed + 1000,
     )
     val_trials = max(
         1,
@@ -472,6 +499,85 @@ def _build_synthetic_split(
     return train_ds, val_ds, test_ds
 
 
+def _build_curriculum(cfg: DictConfig) -> Optional[CurriculumBundle]:
+    """Resolve ``cfg.dynamic_parameter_set`` to a :class:`CurriculumBundle`.
+
+    Reads the regime name from the config (e.g.
+    ``"Soft Three-Stage Curriculum - Shortened"``) and looks up the matching
+    YAML preset in ``configs/schedule/``. Bases for each schedule come
+    from the static config fields (``weight_*``, ``std_*``).
+
+    Returns ``None`` only if the regime string is empty or unspecified —
+    not for ``"None"``/``"No Dynamic Parameters"`` (those resolve to a
+    valid bundle whose schedules just have no waypoints, so the bases
+    propagate untouched).
+    """
+    regime = str(cfg.get("dynamic_parameter_set", "")).strip()
+    if not regime:
+        return None
+
+    base_loads = {
+        "std_channel_offset": float(cfg.get("std_channel_offset", float("nan"))),
+        "std_white_noise":    float(cfg.get("std_white_noise",    float("nan"))),
+        "std_random_walk":    float(cfg.get("std_random_walk",    float("nan"))),
+        "std_time_shift":     float(cfg.get("std_time_shift",     float("nan"))),
+    }
+    base_weights = {
+        "reconstruction":    float(cfg.get("weight_reconstruction", float("nan"))),
+        "kl":                float(cfg.get("weight_kl",             float("nan"))),
+        "classification":    float(cfg.get("weight_classification", float("nan"))),
+        "confidence":        float(cfg.get("weight_confidence",     0.0)),
+        "offset_and_scale":  float(cfg.get("weight_offset_and_scale", 0.0)),
+    }
+    base_freezes = {"encoder": 1.0, "decoder": 1.0, "classifier": 1.0}
+
+    return load_curriculum_by_name(
+        regime,
+        base_loads=base_loads,
+        base_weights=base_weights,
+        base_freezes=base_freezes,
+    )
+
+
+def _build_optimizer(
+    cfg: DictConfig,
+    model: torch.nn.Module,
+    curriculum: Optional[CurriculumBundle],
+) -> torch.optim.Optimizer:
+    """Build the optimizer, using per-module groups when freeze is active.
+
+    The freeze applier requires named param groups. When the curriculum's
+    freeze schedule has waypoints for any submodule, build per-module
+    groups; otherwise stick with the simpler single-group AdamW.
+    """
+    lr = float(cfg.initial_learning_rate)
+    wd = float(cfg.l2_factor)
+
+    needs_groups = curriculum is not None and any(
+        len(curriculum.freeze[name].epoch_points) > 0
+        for name in curriculum.freeze
+    )
+    if not needs_groups:
+        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+
+    # Per-module groups. Skip any submodule the model doesn't expose.
+    module_groups: dict[str, torch.nn.Module] = {}
+    for name in ("encoder", "decoder", "classifier"):
+        sub = getattr(model, name, None)
+        if isinstance(sub, torch.nn.Module):
+            module_groups[name] = sub
+
+    if not module_groups:
+        # Caller passed a freeze schedule but the model has no exposed
+        # submodules to attach groups to (e.g., MultiHeadClassifier).
+        # Fall back to single-group; freeze just won't take effect.
+        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+
+    return build_optimizer_with_module_groups(
+        module_groups, initial_lr=lr, weight_decay=wd,
+    )
+
+
 def _print_epoch(history_entry: Any) -> None:
     """Default epoch callback — single-line stdout update."""
     val_str = (
@@ -486,6 +592,37 @@ def _print_epoch(history_entry: Any) -> None:
         f"train_loss={history_entry.train.classification_loss:.4f}  "
         f"train_acc={history_entry.train.accuracy:.3f}{val_str}{marker}"
     )
+
+
+def _make_print_epoch_with_curriculum(
+    curriculum: CurriculumBundle,
+) -> Any:
+    """Wrap :func:`_print_epoch` to also dump a one-line curriculum snapshot.
+
+    Useful for the Milestone C #5 smoke test — operators can confirm
+    augmentation magnitudes, loss weights, and freeze factors are ticking
+    across epochs without digging into checkpoints.
+    """
+    def _cb(entry: Any) -> None:
+        _print_epoch(entry)
+        weights = ", ".join(
+            f"{n}={curriculum.weight.current(n):.3g}"
+            for n in ("classification", "kl", "reconstruction")
+            if n in curriculum.weight
+        )
+        loads = ", ".join(
+            f"{n}={curriculum.load.current(n):.3g}"
+            for n in ("std_white_noise", "std_channel_offset")
+            if n in curriculum.load
+        )
+        freezes = ", ".join(
+            f"{n}={curriculum.freeze.current(n):.3g}"
+            for n in ("encoder", "decoder", "classifier")
+            if n in curriculum.freeze
+        )
+        print(f"   ↳ weights[{weights}]  loads[{loads}]  freeze[{freezes}]")
+
+    return _cb
 
 
 def _write_cm_table_for_split(

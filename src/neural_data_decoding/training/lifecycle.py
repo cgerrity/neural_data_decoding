@@ -57,7 +57,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -68,8 +68,10 @@ from neural_data_decoding.training.checkpoint import (
     save_current_checkpoint,
     save_optimal_checkpoint,
 )
+from neural_data_decoding.training.freezing import apply_freeze_to_optimizer
 from neural_data_decoding.training.loop import EpochMetrics, train_one_epoch, validate
 from neural_data_decoding.training.losses.multi_objective import LossPriors
+from neural_data_decoding.training.schedules import CurriculumBundle
 
 
 @dataclass(slots=True)
@@ -123,6 +125,9 @@ def fit_supervised(
     on_optimal_callback: Optional[OnOptimalCallback] = None,
     loss_priors: Optional[LossPriors] = None,
     prior_proportion: float = 0.9,
+    curriculum: Optional[CurriculumBundle] = None,
+    freeze_base_lr: Optional[float] = None,
+    rescale_loss_epoch: int = 0,
 ) -> list[EpochHistory]:
     """Run the supervised Stage 2 fit loop end-to-end.
 
@@ -167,6 +172,31 @@ def fit_supervised(
         Optional hook called after each epoch with the populated
         :class:`EpochHistory`. Useful for W&B logging, schedule updates,
         early stopping in later milestones.
+    curriculum
+        Optional :class:`CurriculumBundle` (Milestone C #5). When present,
+        ``curriculum.update(epoch + 1)`` is called at the start of every
+        epoch (the ``+1`` converts Python's 0-indexed loop into MATLAB's
+        1-indexed convention). The bundle's weight schedule then drives
+        the per-epoch ``loss_weights`` dict (overriding the static one
+        passed in for component keys it knows about), and the freeze
+        schedule sets per-group learning rates via
+        :func:`apply_freeze_to_optimizer` (provided
+        ``freeze_base_lr`` is set).
+    freeze_base_lr
+        Reference learning rate for the freeze applier. Typically the
+        config's ``initial_learning_rate``. Required when ``curriculum``
+        is present and its freeze schedule should affect the optimizer;
+        a ``None`` here means the freeze schedule is computed but not
+        applied (useful for testing).
+    rescale_loss_epoch
+        MATLAB ``RescaleLossEpoch`` cadence for EMA-prior updates
+        (Critical Note #6):
+
+        * ``0`` — update every iteration (default; matches the prior
+          Python behavior).
+        * ``1`` — update only the first iteration of every epoch.
+        * ``N > 1`` — update only the first iteration of epochs
+          ``1, N+1, 2N+1, ...``.
 
     Returns
     -------
@@ -191,16 +221,29 @@ def fit_supervised(
 
     history: list[EpochHistory] = []
     for epoch in range(start_epoch, num_epochs):
+        # MATLAB ordering (cgg_trainNetwork.m:484-502): update dynamic
+        # parameters first, then apply freeze, then enter the mini-batch loop.
+        if curriculum is not None:
+            curriculum.update(epoch + 1)   # +1: Python 0-indexed → MATLAB 1-indexed.
+            if freeze_base_lr is not None:
+                apply_freeze_to_optimizer(
+                    optimizer, curriculum.freeze, base_lr=freeze_base_lr,
+                )
+
+        epoch_loss_weights = _resolve_epoch_loss_weights(loss_weights, curriculum)
+        strategy = _update_priors_strategy_for(epoch, rescale_loss_epoch)
+
         train_metrics, loss_priors = train_one_epoch(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
             device=device,
-            loss_weights=loss_weights,
+            loss_weights=epoch_loss_weights,
             class_weights_per_dim=class_weights_per_dim,
             grad_clip_norm=grad_clip_norm,
             loss_priors=loss_priors,
             prior_proportion=prior_proportion,
+            update_priors_strategy=strategy,
         )
         iteration += train_metrics.num_iterations
 
@@ -211,7 +254,7 @@ def fit_supervised(
                 model=model,
                 dataloader=val_loader,
                 device=device,
-                loss_weights=loss_weights,
+                loss_weights=epoch_loss_weights,
                 class_weights_per_dim=class_weights_per_dim,
             )
             if val_metrics.accuracy > best_metric:
@@ -248,6 +291,43 @@ def fit_supervised(
             epoch_callback(entry)
 
     return history
+
+
+def _resolve_epoch_loss_weights(
+    static_weights: Mapping[str, float],
+    curriculum: Optional[CurriculumBundle],
+) -> dict[str, float]:
+    """Snapshot per-epoch loss weights, blending the static defaults with the curriculum.
+
+    The static ``loss_weights`` dict provides defaults for any keys the
+    curriculum's weight schedule does not manage; the schedule overrides
+    keys it knows about with its live current values. Snapshotted once
+    per epoch — magnitudes don't change mid-epoch in MATLAB either.
+    """
+    resolved: dict[str, float] = dict(static_weights)
+    if curriculum is not None:
+        for name in curriculum.weight:
+            resolved[name] = curriculum.weight.current(name)
+    return resolved
+
+
+def _update_priors_strategy_for(
+    epoch: int, rescale_loss_epoch: int,
+) -> Literal["every_iter", "first_iter_only", "never"]:
+    """Translate MATLAB ``RescaleLossEpoch`` into the loop's strategy string.
+
+    See the docstring on :func:`fit_supervised` for the cadence semantics.
+    """
+    if rescale_loss_epoch <= 0:
+        return "every_iter"
+    if rescale_loss_epoch == 1:
+        return "first_iter_only"
+    # MATLAB: mod(Epoch+1, N) == 1, with Epoch 1-indexed. Python epoch is
+    # 0-indexed, so use (epoch + 2) — i.e., MATLAB Epoch = epoch + 1, then
+    # mod(MATLAB Epoch + 1, N) == 1.
+    if (epoch + 2) % rescale_loss_epoch == 1:
+        return "first_iter_only"
+    return "never"
 
 
 __all__ = [

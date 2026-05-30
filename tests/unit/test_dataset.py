@@ -177,3 +177,93 @@ def test_dataloader_with_single_session_sampler(
         assert len(sessions) == 1
         assert batch["x"].ndim == 3
         assert batch["targets"].ndim == 2
+
+
+# ───────────────────────── Augmentation via LoadSchedule (Critical Note #8) ─────────────────────────
+
+
+def _make_dataset_with_schedule(load_schedule, *, augmentation_seed: int = 0) -> SyntheticTrialDataset:
+    """Small reproducible dataset for live-read tests."""
+    return SyntheticTrialDataset(
+        num_sessions=1,
+        trials_per_session=2,
+        num_samples=8,
+        num_features=3,
+        num_classes_per_dim=[2],
+        signal_strength=0.0,    # no signal → all variation is augmentation
+        noise_std=0.0,          # no built-in noise
+        seed=42,
+        load_schedule=load_schedule,
+        augmentation_seed=augmentation_seed,
+    )
+
+
+def test_no_schedule_means_no_augmentation_applied() -> None:
+    """When load_schedule is None, features come straight from the cache."""
+    ds = SyntheticTrialDataset(
+        num_sessions=1, trials_per_session=1,
+        num_samples=5, num_features=2,
+        num_classes_per_dim=[2],
+        signal_strength=0.0, noise_std=0.0, seed=0,
+    )
+    x, _, _ = ds[0]
+    # No signal, no noise, no augmentation → all zeros.
+    np.testing.assert_allclose(x.numpy(), np.zeros_like(x.numpy()))
+
+
+def test_schedule_with_disabled_magnitudes_yields_no_augmentation() -> None:
+    """A schedule whose current magnitudes are NaN/0 acts as a no-op."""
+    from neural_data_decoding.training.schedules import make_load_schedule
+    # All defaults are NaN → all augmentation disabled.
+    sched = make_load_schedule()
+    ds = _make_dataset_with_schedule(sched)
+    x, _, _ = ds[0]
+    np.testing.assert_allclose(x.numpy(), np.zeros_like(x.numpy()))
+
+
+def test_schedule_with_active_magnitudes_adds_variation() -> None:
+    """A schedule with positive white-noise std produces non-zero augmentation."""
+    from neural_data_decoding.training.schedules import make_load_schedule
+    sched = make_load_schedule(std_white_noise=0.5)
+    ds = _make_dataset_with_schedule(sched)
+    x, _, _ = ds[0]
+    # signal=0, noise=0, but augmentation white-noise=0.5 → non-zero result.
+    assert float(x.abs().max()) > 0.0
+
+
+def test_schedule_live_read_picks_up_updates_between_calls() -> None:
+    """Critical Note #8: mutating the schedule between __getitem__ calls
+    must be reflected on the very next call — no snapshot, no cache."""
+    from neural_data_decoding.training.schedules import (
+        Schedule,
+        ScheduleWaypoints,
+        make_load_schedule,
+    )
+    sched = make_load_schedule(
+        std_white_noise=1.0,
+        waypoints=ScheduleWaypoints.of([10, 20], [0.0, 1.0]),
+    )
+    assert isinstance(sched, Schedule)
+    ds = _make_dataset_with_schedule(sched, augmentation_seed=123)
+
+    # Before any update, .current("std_white_noise") was set in
+    # __post_init__ to base (=1.0). Drive epoch=1: magnitude = 0 → no noise.
+    sched.update(1)
+    assert sched.current("std_white_noise") == pytest.approx(0.0)
+    x_clean, _, _ = ds[0]
+    np.testing.assert_allclose(x_clean.numpy(), np.zeros_like(x_clean.numpy()))
+
+    # Drive epoch=30: magnitude clamps to 1.0 → full noise applied.
+    sched.update(30)
+    assert sched.current("std_white_noise") == pytest.approx(1.0)
+    x_noisy, _, _ = ds[0]
+    assert float(x_noisy.abs().max()) > 0.0
+
+
+def test_schedule_reference_is_held_not_copied() -> None:
+    """Dataset stores the schedule by reference (mutation visible immediately)."""
+    from neural_data_decoding.training.schedules import make_load_schedule
+    sched = make_load_schedule(std_white_noise=0.5)
+    ds = _make_dataset_with_schedule(sched)
+    # Same object identity — no defensive copy.
+    assert ds.load_schedule is sched

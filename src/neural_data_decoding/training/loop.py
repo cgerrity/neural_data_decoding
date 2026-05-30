@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -95,6 +95,7 @@ def train_one_epoch(
     loss_priors: Optional[LossPriors] = None,
     prior_proportion: float = 0.9,
     update_priors: bool = True,
+    update_priors_strategy: Optional[Literal["every_iter", "first_iter_only", "never"]] = None,
 ) -> tuple[EpochMetrics, Optional[LossPriors]]:
     """Run one supervised training epoch — Milestone A classifier path.
 
@@ -136,8 +137,19 @@ def train_one_epoch(
     prior_proportion
         EMA smoothing factor passed through when ``loss_priors`` is provided.
     update_priors
-        Whether each iteration EMA-updates the priors. Driven by
-        ``RescaleLossEpoch`` cadence at the lifecycle layer.
+        Whether each iteration EMA-updates the priors. Ignored when
+        ``update_priors_strategy`` is set. Retained for backward
+        compatibility with earlier call sites that don't pass a strategy.
+    update_priors_strategy
+        Per-iteration EMA-update cadence within this epoch:
+
+        * ``"every_iter"`` (default) — every iteration updates the priors.
+          Matches MATLAB ``RescaleLossEpoch == 0``.
+        * ``"first_iter_only"`` — only the first batch updates the priors.
+          Matches MATLAB ``RescaleLossEpoch >= 1`` on an epoch where
+          ``mod(Epoch+1, RescaleLossEpoch) == 1``.
+        * ``"never"`` — no iteration updates the priors. Matches MATLAB
+          ``RescaleLossEpoch > 1`` on a non-update epoch.
 
     Returns
     -------
@@ -150,7 +162,15 @@ def train_one_epoch(
     model.train()
     sums = _MetricSums()
 
-    for batch in dataloader:
+    # Translate the legacy bool into the strategy enum unless the caller
+    # passed an explicit strategy.
+    if update_priors_strategy is None:
+        update_priors_strategy = "every_iter" if update_priors else "never"
+
+    for batch_idx, batch in enumerate(dataloader):
+        update_priors_this_iter = _should_update_priors(
+            update_priors_strategy, batch_idx,
+        )
         x = batch["x"].to(device, non_blocking=True)
         targets = batch["targets"].to(device, non_blocking=True)
         batch_size = int(x.shape[0])
@@ -180,7 +200,7 @@ def train_one_epoch(
                     weights=loss_weights,
                     priors=loss_priors,
                     prior_proportion=prior_proportion,
-                    update_priors=update_priors,
+                    update_priors=update_priors_this_iter,
                 )
                 total_loss = breakdown.total
                 loss_priors = breakdown.updated_priors
@@ -293,6 +313,21 @@ def validate(
         )
 
     return sums.finalize()
+
+
+def _should_update_priors(
+    strategy: Literal["every_iter", "first_iter_only", "never"], batch_idx: int,
+) -> bool:
+    """Whether to update EMA priors on the iteration with index ``batch_idx``.
+
+    Encodes the MATLAB ``RescaleLossEpoch`` cadence (Critical Note #6):
+    every iteration, only the first iteration of the epoch, or never.
+    """
+    if strategy == "every_iter":
+        return True
+    if strategy == "first_iter_only":
+        return batch_idx == 0
+    return False
 
 
 def _per_dim_accuracy(

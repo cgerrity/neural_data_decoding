@@ -1,0 +1,16 @@
+# None — baseline regime with no dynamic schedules.
+#
+# Mirrors MATLAB's `PARAMETERS_cgg_selectDynamicParameters('None')`. All
+# parameters stay at their static base values for every epoch.
+#
+# Also serves as the target for `slugify_regime("No Dynamic Parameters")` —
+# functionally identical in MATLAB ('No Dynamic Parameters' and 'None'
+# both leave the dynamic structs empty).
+
+matlab_name: "None"
+
+# (Empty blocks are equivalent to omitting them — `load_curriculum_from_yaml`
+# treats null/empty as "no schedule" for each section.)
+weights: {}
+freeze: {}
+augmentation: {}

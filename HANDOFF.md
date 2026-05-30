@@ -2,7 +2,7 @@
 
 A self-contained snapshot of project state, conventions, and the next step.
 Intended for a fresh contributor (human or AI) picking up the work — read
-top-to-bottom, then start at "Next up". Last updated 2026-05-28.
+top-to-bottom, then start at "Next up". Last updated 2026-05-29.
 
 ## Where the project lives
 
@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **296 passed, 4 deselected** by default; **4 passed** under
+Expected: **409 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -83,7 +83,7 @@ neural_data_decoding/
 | 0 — Foundation | ✅ Complete | Stratification: element-for-element MATLAB |
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
-| C — Full Optimal VAE | 🚧 **Core complete + variational smoke-runnable**; curriculum / two-stage / confidence-in-training-path pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10 |
+| C — Full Optimal VAE | 🚧 **Core + curriculum schedules complete**; two-stage lifecycle / confidence-in-training-path pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; curriculum interpolator ~1e-12 |
 | CC — Extra-credit features | ⏳ Pending |  |
 | D — Cluster deployment | ⏳ Pending |  |
 
@@ -126,74 +126,68 @@ Milestone C status — what's done
   written. Matches the MATLAB pipeline's convention: validation drives
   model selection during training; test is what downstream analysis
   aggregates for the reported results.
+- **Dynamic curriculum schedules** (Milestone C #5) — port of MATLAB's
+  three sibling schedules (`LoadParameters` / `WeightParameters` /
+  `FreezeParameters`) sharing the `cgg_calculateDynamicValue` +
+  `cgg_annealWeight` interpolator. Pythonic single-class
+  `Schedule` + factory functions (`make_load_schedule`,
+  `make_weight_schedule`, `make_freeze_schedule`) + `CurriculumBundle`.
+  YAML preset library (`configs/schedule/*.yaml`); the
+  `Soft Three-Stage Curriculum - Shortened` regime is verified to
+  ~1e-12 per-epoch against the MATLAB
+  `PARAMETERS_cgg_selectDynamicParameters` outputs. The
+  off-by-one quirk inside `cgg_annealWeight` (segment-end
+  discontinuity) is preserved exactly and pinned by a regression test.
+  Dataset reads load magnitudes live in `__getitem__` (Critical
+  Note #8); freeze applies via per-module optimizer param groups
+  (`build_optimizer_with_module_groups` + `apply_freeze_to_optimizer`);
+  `RescaleLossEpoch` cadence (Critical Note #6) honored via a
+  per-epoch `update_priors_strategy` derived from the MATLAB
+  `mod(Epoch+1, N) == 1` test. Smoke run with
+  `C_optimal_synthetic.yaml` (now using the Soft Three-Stage regime)
+  shows augmentation, weights, and freeze ticking as expected and
+  the train loss collapsing right when the classifier unfreezes
+  at epoch 11.
 
-## Next up — Milestone C #5 (dynamic curriculum schedules)
-
-Per Critical Notes #7, #8. Three sibling schedules driving augmentation,
-loss weights, and freeze decisions; all sharing one piecewise-linear
-interpolator (`cgg_calculateDynamicValue`).
-
-### First step — 5-pass read of these MATLAB files
-
-(See the `feedback-matlab-reference` memory for the read-pass discipline.
-The user explicitly asked for ~5 passes on high-risk ports; these
-qualify.)
-
-1. `Processing_Functions_cgg/Parameters/PARAMETERS_cgg_selectDynamicParameters.m`
-   — defines the `'Soft Three-Stage Curriculum - Shortened'`
-   waypoint sets.
-2. `Processing_Functions_cgg/ANN Functions/Training Functions/cgg_calculateDynamicValue.m`
-   — the piecewise-linear interpolator every schedule uses.
-3. `Processing_Functions_cgg/ANN Functions/Training Functions/cgg_generateLoadParameters_v2.m`
-   — augmentation-magnitude schedule.
-4. `Processing_Functions_cgg/ANN Functions/Training Functions/cgg_generateLossWeights_v2.m`
-   — per-epoch loss weights (drives KL annealing).
-5. `Processing_Functions_cgg/ANN Functions/Training Functions/cgg_generateFreezeParameters.m`
-   — per-network freeze magnitudes.
-6. The call sites in `cgg_trainNetwork.m` (look for
-   `cgg_setFrozenNetwork_v2` and the augmentation-read pattern in the
-   data pipeline — Critical Note #8 mandates live-read at
-   `__getitem__`, NOT snapshot per epoch).
-
-### Concrete first chunk
-
-| File | Status |
-|---|---|
-| `src/neural_data_decoding/training/schedules/base.py` | New — abstract `Schedule` base + `piecewise_linear_value(epoch, waypoints)` helper |
-| `src/neural_data_decoding/training/schedules/load.py` | New — `LoadSchedule` with `current_*` properties read by the Dataset |
-| `src/neural_data_decoding/training/schedules/weights.py` | New — `WeightSchedule` (KL annealing built-in: `WeightDelayEpoch` + `WeightEpochRamp`) |
-| `src/neural_data_decoding/training/schedules/freeze.py` | New — `FreezeSchedule` + `apply_freeze_schedule(net, schedule, epoch)` helper |
-| `data/dataset.py::SyntheticTrialDataset` | Modify — accept optional `load_schedule` and read magnitudes live in `__getitem__` |
-| `training/loop.py` | Modify — call `schedule.update(epoch)` at epoch start; thread freeze application |
-| `configs/schedule/soft_three_stage_curriculum_shortened.yaml` | New — waypoint table per `PARAMETERS_cgg_selectDynamicParameters` |
-| `tests/parity/test_t2_dynamic_schedules.py` | New — fixture-based parity (per-epoch values vs MATLAB; one fixture per schedule type) |
-| `tests/unit/test_schedules.py` | New — piecewise-linear edge cases, live-read contract |
-
-### Also fold in
-
-- `RescaleLossEpoch` cadence in the training loop so the EMA-prior update
-  respects `0`/`1`/`>1` cadence (currently always updates).
-- Augmentation re-randomization per `__getitem__` (Critical Note #7) is
-  already correct via the existing `rng` per-trial draw; the new piece
-  is that the **magnitudes** themselves come from the live schedule.
-
-### What "done" looks like
-
-Smoke run with the curriculum config enabled, augmentation magnitudes
-visibly tick across epochs (`STDChannelOffset` etc. logged via
-`epoch_callback`), KL weight ramps from 0 → 1 between epochs
-`WeightDelayEpoch` and `WeightDelayEpoch + WeightEpochRamp`, and at
-least one per-network freeze waypoint takes effect. Parity tests pin
-per-epoch schedule values to ~1e-10 against MATLAB.
-
-### After #5
+## Next up — Milestone C #6 (full two-stage lifecycle)
 
 **#6 — full two-stage lifecycle**: Stage 1 unsupervised pre-training
 (`NumEpochsAutoEncoder > 0`) handing off Optimal autoencoder weights to
 Stage 2 supervised (which adds the classifier). Plus KL annealing
-integration, hardware-aware accumulation table (Note #18), and the
+integration (the `KLBaseAnneal` helper exists but isn't yet plumbed via
+the CLI config), hardware-aware accumulation table (Note #18), and the
 `needReshape` / OutputBlock plumbing if real-data inputs (SSCTB) arrive
 during this work.
+
+### Where to read first (MATLAB)
+
+1. `Processing_Functions_cgg/ANN Functions/cgg_trainAllAutoEncoder_v2.m`
+   — the two-stage dispatcher (lines 171-221 are the decision tree).
+2. `Processing_Functions_cgg/ANN Functions/cgg_trainNetwork.m`
+   — what runs in each stage (lines 358-366 are the freeze
+   initialization for stage 1; the rest is the unified loop already
+   ported).
+3. Any helpers around `NumEpochsAutoEncoder` to understand the
+   classifier-deferred construction path (Stage 1 is run with no
+   classifier argument, mirroring `HasClassifier=false`).
+
+### Already in place from Milestone C #5
+
+The curriculum schedules + freeze applier + RescaleLossEpoch cadence are
+done; the hooks they need from #6 are:
+- A clean way to run Stage 1 with classifier=None (the lifecycle layer
+  already accepts `val_loader=None` for Stage 1's "no validation" case).
+- A way to hand off Stage 1 Optimal encoder weights into the
+  Stage 2 composite. Probably a thin "stage transition" function.
+
+### What "done" looks like
+
+A new `C_two_stage_synthetic.yaml` config with `num_epochs_autoencoder=5`
+and `num_epochs_full=15` runs Stage 1 unsupervised (encoder+decoder only,
+no classification loss), saves Optimal autoencoder weights, then enters
+Stage 2 with the classifier built on those weights and trains the full
+composite. Both stages share the same lifecycle code path; only the
+"which losses are active" / "which networks exist" differ.
 
 ## Quick command reference
 
@@ -238,7 +232,8 @@ Parity fixtures live at `tests/fixtures/golden_weights/*.mat` (gitignored).
 Regenerate any one with `matlab -batch "run('scripts/generate_t2_<name>_fixture.m')"`
 or all of Milestone N's via `python scripts/prepare_golden_fixtures.py --milestone N`.
 Current generators: stratification, T2 encoder (GRU+LSTM), T2 composite,
-T2 ELBO, T2 MIL softmax, T2 confidence, CM_Table conversion.
+T2 ELBO, T2 MIL softmax, T2 confidence, T2 dynamic-schedule interpolator,
+CM_Table conversion.
 
 ## See also
 

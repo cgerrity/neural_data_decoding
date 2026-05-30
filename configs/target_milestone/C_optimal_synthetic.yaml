@@ -1,5 +1,6 @@
 # Milestone C — Stochastic VAE (GRU encoder + bottleneck(2*latent) +
-# sampling + decoder + Deep LSTM classifier) on Synthetic_Easy.
+# sampling + decoder + Deep LSTM classifier) on Synthetic_Easy, now
+# with the Soft Three-Stage Curriculum - Shortened regime active.
 #
 # Exercises (Critical Notes in parens):
 #   - VAE sampling layer (Note #35: deterministic at eval)
@@ -9,6 +10,8 @@
 #   - EMA prior normalization across recon + KL + classification (Notes
 #     #6, #30: Classification's prior is the cross-component reference)
 #   - Single gradient root Loss_Encoder (Note #28)
+#   - Dynamic curriculum schedules (Milestone C #5): per-epoch load
+#     magnitudes, loss weights, and per-module freeze factors
 #
 # Still deferred to later chunks of Milestone C:
 #   - Confidence routing (the kernel exists but isn't wired into the
@@ -16,7 +19,6 @@
 #     with the curriculum schedules)
 #   - MIL softmax pooling integration (the kernel exists; classifier
 #     output post-processing is upcoming)
-#   - Dynamic curriculum schedules (load/loss-weight/freeze)
 #   - Stage 1 unsupervised pre-training
 
 defaults:
@@ -67,7 +69,15 @@ num_epochs_autoencoder: 0
 num_epochs_full: 20
 initial_learning_rate: 0.005
 mini_batch_size: 16
-dynamic_parameter_set: "No Dynamic Parameters"
+dynamic_parameter_set: "Soft Three-Stage Curriculum - Shortened"
+
+# Augmentation bases for the live-schedule (Critical Note #8). The
+# curriculum's magnitudes multiply against these — keep them small for
+# the synthetic smoke so the signal stays learnable.
+std_channel_offset: 0.03
+std_white_noise: 0.015
+std_random_walk: 0.0007
+std_time_shift: 100
 
 # ───────────────────────── Synthetic data parameters ─────────────────────────
 synthetic_num_sessions: 4
