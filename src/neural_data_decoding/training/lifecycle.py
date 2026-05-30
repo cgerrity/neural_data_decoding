@@ -83,6 +83,7 @@ from neural_data_decoding.training.loop import (
     validate,
     validate_unsupervised,
 )
+from neural_data_decoding.training.losses.confidence import ConfidenceHistory
 from neural_data_decoding.training.losses.multi_objective import LossPriors
 from neural_data_decoding.training.schedules import CurriculumBundle
 
@@ -141,6 +142,7 @@ def fit_supervised(
     curriculum: Optional[CurriculumBundle] = None,
     freeze_base_lr: Optional[float] = None,
     rescale_loss_epoch: int = 0,
+    confidence_history: Optional["ConfidenceHistory"] = None,
 ) -> list[EpochHistory]:
     """Run the supervised Stage 2 fit loop end-to-end.
 
@@ -246,7 +248,7 @@ def fit_supervised(
         epoch_loss_weights = _resolve_epoch_loss_weights(loss_weights, curriculum)
         strategy = _update_priors_strategy_for(epoch, rescale_loss_epoch)
 
-        train_metrics, loss_priors = train_one_epoch(
+        train_metrics, loss_priors, confidence_history = train_one_epoch(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
@@ -257,6 +259,7 @@ def fit_supervised(
             loss_priors=loss_priors,
             prior_proportion=prior_proportion,
             update_priors_strategy=strategy,
+            confidence_history=confidence_history,
         )
         iteration += train_metrics.num_iterations
 

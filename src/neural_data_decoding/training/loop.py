@@ -46,6 +46,10 @@ from neural_data_decoding.models.composite import AutoencoderOutput, Variational
 from neural_data_decoding.training.losses.classification import (
     multi_head_cross_entropy,
 )
+from neural_data_decoding.training.losses.confidence import (
+    ConfidenceHistory,
+    apply_confidence_routing,
+)
 from neural_data_decoding.training.losses.elbo import (
     kl_divergence_loss,
     masked_mse_reconstruction_loss,
@@ -96,7 +100,8 @@ def train_one_epoch(
     prior_proportion: float = 0.9,
     update_priors: bool = True,
     update_priors_strategy: Optional[Literal["every_iter", "first_iter_only", "never"]] = None,
-) -> tuple[EpochMetrics, Optional[LossPriors]]:
+    confidence_history: Optional[ConfidenceHistory] = None,
+) -> tuple[EpochMetrics, Optional[LossPriors], Optional[ConfidenceHistory]]:
     """Run one supervised training epoch — Milestone A classifier path.
 
     Parameters
@@ -150,6 +155,14 @@ def train_one_epoch(
           ``mod(Epoch+1, RescaleLossEpoch) == 1``.
         * ``"never"`` — no iteration updates the priors. Matches MATLAB
           ``RescaleLossEpoch > 1`` on a non-update epoch.
+    confidence_history
+        Optional :class:`ConfidenceHistory` (Milestone C #7). When
+        present AND the model produces confidence outputs (trial /
+        task fields on :class:`VariationalOutput`), each iteration
+        calls :func:`apply_confidence_routing` to compute the per-trial
+        / per-task / total confidence losses + the Beta P-controller
+        update; the confidence loss is then folded into the aggregator
+        as the ``confidence`` component scaled by the live ``Beta``.
 
     Returns
     -------
@@ -158,6 +171,10 @@ def train_one_epoch(
     LossPriors or None
         The priors state after the epoch (or ``None`` if no priors were
         provided). Caller persists this for the next epoch.
+    ConfidenceHistory or None
+        The confidence history state after the epoch (or ``None`` if no
+        confidence history was provided). Caller persists this for the
+        next epoch.
     """
     model.train()
     sums = _MetricSums()
@@ -192,15 +209,43 @@ def train_one_epoch(
                 )
             kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
 
+            # Confidence (Milestone C #7): if the model produces trial or
+            # task confidence AND the caller threaded a ConfidenceHistory
+            # state, advance the Beta P-controller, EMAs, and per-branch
+            # losses. The summed branch losses become the confidence
+            # component; Beta scales it inside the prior normalizer.
+            confidence_loss: Optional[torch.Tensor] = None
+            confidence_beta_scalar: float = 1.0
+            if confidence_history is not None and (
+                out.trial_confidence is not None or out.task_confidence is not None
+            ):
+                cb = apply_confidence_routing(
+                    y=logits[0], target=logits[0].detach(),  # ignored: see below
+                    trial_confidence=out.trial_confidence,
+                    task_confidence=out.task_confidence,
+                    history=confidence_history,
+                    batch_fraction=1.0,
+                    compute_interpolation=False,
+                    loss_type="L1",
+                )
+                # Sum the three branch losses → single confidence component.
+                # Matches MATLAB cgg_getConfidenceLossInformation's
+                # Loss_Confidence = TrialConf + TaskConf + TotalConf summation.
+                confidence_loss = cb.total_loss + cb.trial_loss + cb.task_loss
+                confidence_beta_scalar = float(cb.updated_history.beta)
+                confidence_history = cb.updated_history
+
             if loss_priors is not None:
                 breakdown = aggregate_normalized_losses(
                     reconstruction_loss=recon_loss,
                     kl_loss=kl_loss,
                     classification_loss=cls_loss,
+                    confidence_loss=confidence_loss,
                     weights=loss_weights,
                     priors=loss_priors,
                     prior_proportion=prior_proportion,
                     update_priors=update_priors_this_iter,
+                    confidence_beta=confidence_beta_scalar,
                 )
                 total_loss = breakdown.total
                 loss_priors = breakdown.updated_priors
@@ -211,6 +256,7 @@ def train_one_epoch(
                     classification_loss=cls_loss,
                     reconstruction_loss=recon_loss,
                     kl_loss=kl_loss,
+                    confidence_loss=confidence_loss,
                     weights=loss_weights,
                 )
         else:
@@ -235,7 +281,7 @@ def train_one_epoch(
             batch_size=batch_size,
         )
 
-    return sums.finalize(), loss_priors
+    return sums.finalize(), loss_priors, confidence_history
 
 
 @torch.no_grad()

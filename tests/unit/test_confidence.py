@@ -103,6 +103,7 @@ def test_no_gradient_flows_back_to_historical_ema() -> None:
         total=torch.tensor(0.7, requires_grad=True),
         trial=torch.tensor(0.7, requires_grad=True),
         task=torch.tensor(0.7,  requires_grad=True),
+        beta=torch.tensor(1.0),
     )
     y      = torch.randn(2, 3, 4)
     target = torch.randn(2, 3, 4)

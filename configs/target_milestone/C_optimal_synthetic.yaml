@@ -14,12 +14,10 @@
 #     magnitudes, loss weights, and per-module freeze factors
 #
 # Still deferred to later chunks of Milestone C:
-#   - Confidence routing (the kernel exists but isn't wired into the
-#     forward path of VariationalComposite yet — that connection lives
-#     with the curriculum schedules)
 #   - MIL softmax pooling integration (the kernel exists; classifier
 #     output post-processing is upcoming)
-#   - Stage 1 unsupervised pre-training
+#   - Stage 1 unsupervised pre-training (use C_two_stage_synthetic.yaml
+#     to exercise that path)
 
 defaults:
   - /base
@@ -45,8 +43,11 @@ classifier_dropout: 0.5
 want_normalization: false
 activation: ""
 
-# ───────────────────────── Confidence / MIL disabled (deferred) ─────────────────────────
-confidence_type: []
+# ───────────────────────── Confidence enabled (Milestone C #7); MIL deferred ─────────────────────────
+# Trial + Task confidence heads grafted onto the variational composite;
+# Beta P-controller adjusts the confidence-loss contribution per batch
+# based on the running mean TotalConfidence (target = 0.5).
+confidence_type: ["Trial", "Task"]
 multiple_instance_learning_type: "None"
 want_batch_correction: false
 
@@ -57,7 +58,7 @@ want_batch_correction: false
 weight_reconstruction: 100
 weight_kl: 1
 weight_classification: 10
-weight_confidence: 0
+weight_confidence: 1
 weight_offset_and_scale: 0
 prior_proportion: 0.9
 

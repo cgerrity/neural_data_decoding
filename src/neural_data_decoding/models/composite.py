@@ -44,6 +44,10 @@ import torch.nn as nn
 
 from neural_data_decoding.models.bottleneck import LinearBottleneck
 from neural_data_decoding.models.classifier import DeepLSTMClassifier
+from neural_data_decoding.models.confidence_heads import (
+    TaskConfidenceHead,
+    TrialConfidenceHead,
+)
 from neural_data_decoding.models.decoder import NoopDecoder, build_decoder
 from neural_data_decoding.models.encoder import SimpleSequenceEncoder
 from neural_data_decoding.models.layers.nan_to_zero import NaNToZero
@@ -115,12 +119,23 @@ class VariationalOutput:
         Latent mean from the sampling layer.
     logvar
         Latent log-variance from the sampling layer.
+    trial_confidence
+        Per-trial confidence ``(batch, time, 1)`` from
+        :class:`~neural_data_decoding.models.confidence_heads.TrialConfidenceHead`.
+        ``None`` when no Trial head is configured (``confidence_type``
+        omits ``'Trial'``).
+    task_confidence
+        Per-output-dim confidence ``(batch, time, num_dims)`` from
+        :class:`~neural_data_decoding.models.confidence_heads.TaskConfidenceHead`.
+        ``None`` when no Task head is configured.
     """
 
     logits: list[torch.Tensor]
     reconstruction: Optional[torch.Tensor]
     mu: torch.Tensor
     logvar: torch.Tensor
+    trial_confidence: Optional[torch.Tensor] = None
+    task_confidence: Optional[torch.Tensor] = None
 
 
 class VariationalComposite(nn.Module):
@@ -185,6 +200,8 @@ class VariationalComposite(nn.Module):
         decoder: nn.Module,
         classifier: nn.Module,
         nan_to_zero: Optional[NaNToZero] = None,
+        trial_confidence_head: Optional[TrialConfidenceHead] = None,
+        task_confidence_head: Optional[TaskConfidenceHead] = None,
     ) -> None:
         super().__init__()
         self.nan_to_zero = nan_to_zero if nan_to_zero is not None else NaNToZero()
@@ -193,7 +210,15 @@ class VariationalComposite(nn.Module):
         self.sampling = sampling
         self.decoder = decoder
         self.classifier = classifier
+        self.trial_confidence_head = trial_confidence_head
+        self.task_confidence_head = task_confidence_head
         self.has_reconstruction = not isinstance(decoder, NoopDecoder)
+        # Task confidence requires the classifier to expose penultimate
+        # features. DeepLSTMClassifier does; MultiHeadClassifier does not.
+        # Detected lazily in forward() so a Task head built against a
+        # classifier that supports it just works.
+        self.has_trial_confidence = trial_confidence_head is not None
+        self.has_task_confidence = task_confidence_head is not None
 
     def forward(self, x: torch.Tensor) -> VariationalOutput:
         """Run the full variational forward pass.
@@ -209,7 +234,8 @@ class VariationalComposite(nn.Module):
         -------
         VariationalOutput
             ``logits`` (per-dim), ``reconstruction`` (or ``None``), ``mu``,
-            ``logvar``.
+            ``logvar``, ``trial_confidence`` (or ``None``),
+            ``task_confidence`` (or ``None``).
         """
         x0 = self.nan_to_zero(x)
         encoded = self.encoder(x0)
@@ -220,9 +246,32 @@ class VariationalComposite(nn.Module):
         if self.has_reconstruction:
             reconstruction = self.decoder(z)
 
-        logits = self.classifier(z)
+        # Classifier path: when a Task confidence head is present, ask the
+        # classifier to also surface its penultimate features (one tensor
+        # per output dim) so the Task head can tap them in parallel to
+        # the classification FC. Otherwise stick with the plain forward.
+        task_confidence: Optional[torch.Tensor] = None
+        if self.task_confidence_head is not None:
+            if not hasattr(self.classifier, "forward_with_features"):
+                raise TypeError(
+                    "task_confidence_head requires a classifier that exposes "
+                    "`forward_with_features` (e.g. DeepLSTMClassifier). "
+                    f"Got {type(self.classifier).__name__}."
+                )
+            features_per_dim, logits = self.classifier.forward_with_features(z)
+            task_confidence = self.task_confidence_head(features_per_dim)
+        else:
+            logits = self.classifier(z)
+
+        trial_confidence: Optional[torch.Tensor] = None
+        if self.trial_confidence_head is not None:
+            trial_confidence = self.trial_confidence_head(z)
+
         return VariationalOutput(
-            logits=logits, reconstruction=reconstruction, mu=mu, logvar=logvar
+            logits=logits, reconstruction=reconstruction,
+            mu=mu, logvar=logvar,
+            trial_confidence=trial_confidence,
+            task_confidence=task_confidence,
         )
 
 
@@ -287,13 +336,46 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
         dropout=float(cfg.get("classifier_dropout", 0.5)),
     )
 
+    # Confidence heads (Milestone C #7) — built conditionally based on
+    # cfg.confidence_type. Recognized entries (case-insensitive,
+    # whitespace-tolerant): "Trial" and "Task".
+    confidence_types = _normalize_confidence_types(cfg.get("confidence_type", []))
+    trial_head: Optional[TrialConfidenceHead] = None
+    task_head: Optional[TaskConfidenceHead] = None
+    if "trial" in confidence_types:
+        trial_head = TrialConfidenceHead(in_features=latent)
+    if "task" in confidence_types:
+        # All DeepLSTMClassifier stacks share the same final hidden size
+        # (last entry of classifier_hidden_size).
+        last_hidden = classifier_hidden[-1] if classifier_hidden else latent
+        task_head = TaskConfidenceHead(
+            in_features_per_dim=[last_hidden] * len(num_classes_per_dim),
+        )
+
     return VariationalComposite(
         encoder=encoder,
         bottleneck=bottleneck,
         sampling=sampling,
         decoder=decoder,
         classifier=classifier,
+        trial_confidence_head=trial_head,
+        task_confidence_head=task_head,
     )
+
+
+def _normalize_confidence_types(raw: Any) -> set[str]:
+    """Lower-case the confidence_type list for case-insensitive containment checks.
+
+    Accepts a list, tuple, or single string (MATLAB sometimes passes a
+    bare string when only one type is active).
+    """
+    if isinstance(raw, str):
+        items = [raw]
+    elif raw is None:
+        items = []
+    else:
+        items = list(raw)
+    return {str(it).strip().lower() for it in items if str(it).strip()}
 
 
 @dataclass(slots=True)
@@ -509,4 +591,9 @@ __all__ = [
     "build_variational_composite",
     "copy_autoencoder_weights",
 ]
+
+
+# Re-export TaskConfidenceHead so callers don't have to dig through
+# models/confidence_heads.py. (TrialConfidenceHead and TaskConfidenceHead
+# are already exported from confidence_heads.py for direct use.)
 

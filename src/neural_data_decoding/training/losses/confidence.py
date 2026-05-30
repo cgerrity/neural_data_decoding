@@ -83,11 +83,12 @@ LossType = Literal["L1", "L2", "L1 & L2", "CrossEntropy"]
 
 @dataclass(slots=True)
 class ConfidenceHistory:
-    """Detached EMA state for the three confidence streams.
+    """Detached EMA state + P-controller Beta for the confidence streams.
 
     Each field holds a scalar tensor (the running mean confidence over the
-    dataset for that stream). Values are detached from any autograd graph
-    — see subtlety #4 in the module docstring.
+    dataset for that stream, or the controller's Beta scalar). Values are
+    detached from any autograd graph — see subtlety #4 in the module
+    docstring.
 
     Attributes
     ----------
@@ -97,11 +98,20 @@ class ConfidenceHistory:
         EMA of ``TrialConfidence``.
     task
         EMA of ``TaskConfidence``.
+    beta
+        "Autonomous Equilibrium Controller" Beta (despite the MATLAB
+        function's "PD-controller" name, the implementation is a pure
+        P-controller). Multiplicatively scales the final confidence
+        contribution to the total loss. Updated per batch via
+        ``Beta_new = Beta_prev * (1 + (target - batch_mean) * rate)``,
+        clamped to ``[beta_min, beta_max]``. See module-level constants
+        and :func:`apply_confidence_routing`.
     """
 
     total: torch.Tensor
     trial: torch.Tensor
     task: torch.Tensor
+    beta: torch.Tensor
 
     @classmethod
     def initial(
@@ -113,12 +123,51 @@ class ConfidenceHistory:
     ) -> "ConfidenceHistory":
         """Build the MATLAB-equivalent initial history (all ``1.0``).
 
-        Mirrors ``cgg_lossConfidence.m`` lines 98-109: when history is
-        empty / NaN, MATLAB initializes each stream to 1.0. The same
-        initialization happens here.
+        Mirrors ``cgg_lossConfidence.m`` lines 98-109 + ``cgg_getLossInformation.m``
+        line 102: when history is empty / NaN, MATLAB initializes each EMA
+        stream to 1.0 and Beta to 1.0. The same initialization happens here.
         """
         t = torch.full((), value, dtype=dtype, device=device)
-        return cls(total=t.clone(), trial=t.clone(), task=t.clone())
+        beta = torch.full((), 1.0, dtype=dtype, device=device)
+        return cls(total=t.clone(), trial=t.clone(), task=t.clone(), beta=beta)
+
+
+# Confidence_Beta P-controller hyperparameters (MATLAB
+# cgg_getConfidenceLossInformation.m lines 10-15).
+CONFIDENCE_BETA_MAX: float = 10.0
+CONFIDENCE_BETA_MIN: float = 0.1
+CONFIDENCE_BETA_TARGET: float = 0.5
+CONFIDENCE_BETA_DIFFERENCE_RATE: float = 1.0
+
+
+def _update_confidence_beta(
+    beta_prev: torch.Tensor,
+    total_batch_mean: torch.Tensor,
+) -> torch.Tensor:
+    """Advance the Confidence_Beta P-controller by one step.
+
+    Mirrors ``cgg_getConfidenceLossInformation.m`` lines 60-75. The
+    function is named "Autonomous Equilibrium Controller" in MATLAB but
+    the implementation is a pure P-controller on the gap between the
+    target (0.5) and the batch's mean TotalConfidence.
+
+    Parameters
+    ----------
+    beta_prev
+        The previous step's Beta (scalar tensor).
+    total_batch_mean
+        ``mean(TotalConfidence)`` for the current batch (scalar tensor).
+        Use the **undropped** confidence (matching MATLAB).
+
+    Returns
+    -------
+    torch.Tensor
+        The clamped new Beta (detached).
+    """
+    diff = CONFIDENCE_BETA_TARGET - total_batch_mean
+    new_beta = beta_prev * (1.0 + diff * CONFIDENCE_BETA_DIFFERENCE_RATE)
+    new_beta = new_beta.clamp(CONFIDENCE_BETA_MIN, CONFIDENCE_BETA_MAX)
+    return new_beta.detach()
 
 
 @dataclass(slots=True)
@@ -274,6 +323,7 @@ def apply_confidence_routing(
     want_batch_correction: bool = False,
     loss_type: LossType = "L1",
     time_dim: int = 1,
+    compute_interpolation: bool = True,
     explicit_trial_dropout_mask: Optional[torch.Tensor] = None,
     explicit_task_dropout_mask: Optional[torch.Tensor] = None,
     generator: Optional[torch.Generator] = None,
@@ -321,6 +371,15 @@ def apply_confidence_routing(
     time_dim
         Axis of ``y`` / ``target`` / confidences treated as time. Default
         ``1`` for ``(B, T, K)``.
+    compute_interpolation
+        When ``True`` (default), compute and return ``y_interpolated``
+        (Eq. 2). When ``False``, return ``y`` unchanged in that slot —
+        the caller wants only the loss + Beta + EMA outputs and will
+        compute its own prediction interpolation per output dim (or skip
+        it). Skipping is mandatory when ``y`` and the confidence tensors
+        don't share a last-axis size (e.g. per-dim classification logits
+        vs ``(B, T, num_dims)`` task confidence) — otherwise the
+        interpolation's broadcasting would silently misalign.
     explicit_trial_dropout_mask, explicit_task_dropout_mask
         Optional boolean masks (same shape as the last-timestep
         confidence). For deterministic testing of subtlety #2 without
@@ -366,7 +425,7 @@ def apply_confidence_routing(
             total_dropped = trial_dropped
 
     if total_dropped is None:
-        # No confidence at all → no interpolation, no losses, no EMA update.
+        # No confidence at all → no interpolation, no losses, no EMA / Beta update.
         return ConfidenceLossBreakdown(
             y_interpolated=y,
             total_loss=zero, trial_loss=zero, task_loss=zero,
@@ -376,11 +435,34 @@ def apply_confidence_routing(
     # together. The assertion narrows the type for the checker.
     assert total_undropped is not None
 
+    # ── Beta P-controller (mirrors cgg_getConfidenceLossInformation) ──────
+    # MATLAB subtlety: the Beta controller uses the **full-tensor mean** of
+    # TotalConfidence (`mean(TotalConfidence, "all")` in
+    # cgg_getConfidenceLossInformation.m line 51) — NOT the last-timestep
+    # mean that the EMA / branch-loss path uses (which mirrors
+    # cgg_lossConfidence.m's cgg_getLastSequenceValue convention). Compute
+    # both means: the full one for Beta, the last-timestep ones for EMAs
+    # and losses.
+    if trial_confidence is not None and task_confidence is not None:
+        full_total = trial_confidence * task_confidence
+    elif trial_confidence is not None:
+        full_total = trial_confidence
+    else:
+        assert task_confidence is not None
+        full_total = task_confidence
+    beta_batch_mean = full_total.detach().mean()
+    new_beta = _update_confidence_beta(history.beta, beta_batch_mean)
+
     # ── Interpolation (Eq. 2, subtlety #3) ───────────────────────────────
     # total_dropped is shape (B, K); broadcast a time-axis-1 to apply the
-    # per-trial weighting to all timesteps of y.
-    td_broadcast = total_dropped.unsqueeze(time_dim)
-    y_interpolated = td_broadcast * y + (1 - td_broadcast) * target
+    # per-trial weighting to all timesteps of y. Skipped when the caller
+    # explicitly opts out (typical for multi-dim classification where
+    # per-dim interpolation happens elsewhere).
+    if compute_interpolation:
+        td_broadcast = total_dropped.unsqueeze(time_dim)
+        y_interpolated = td_broadcast * y + (1 - td_broadcast) * target
+    else:
+        y_interpolated = y
 
     # ── Branch losses (subtleties #4, #5; plus Eq. 10 correction) ────────
     total_loss, new_total = _branch_loss(
@@ -417,7 +499,7 @@ def apply_confidence_routing(
         trial_loss=trial_loss,
         task_loss=task_loss,
         updated_history=ConfidenceHistory(
-            total=new_total, trial=new_trial, task=new_task,
+            total=new_total, trial=new_trial, task=new_task, beta=new_beta,
         ),
     )
 

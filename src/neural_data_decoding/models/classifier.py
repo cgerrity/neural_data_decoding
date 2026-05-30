@@ -295,6 +295,43 @@ class DeepLSTMClassifier(nn.Module):
             )
         return [stack(x) for stack in self.stacks]
 
+    def forward_with_features(
+        self, x: torch.Tensor,
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        """Same as :meth:`forward` but also returns per-dim penultimate features.
+
+        Used by :class:`~neural_data_decoding.models.confidence_heads.TaskConfidenceHead`
+        which taps the classifier's last LSTM output (just before the FC
+        head) to emit a per-dim sigmoid scalar. Returning both keeps the
+        existing ``forward`` contract intact for callers that only need
+        logits.
+
+        Parameters
+        ----------
+        x
+            Input tensor of shape ``(batch, time, in_features)``.
+
+        Returns
+        -------
+        features_per_dim : list of torch.Tensor
+            Penultimate-layer output per dim, each
+            ``(batch, time, hidden_size_last)``.
+        logits_per_dim : list of torch.Tensor
+            Same as :meth:`forward`, each ``(batch, time, num_classes_d)``.
+        """
+        if x.shape[-1] != self.in_features:
+            raise ValueError(
+                f"Input last dim ({x.shape[-1]}) does not match "
+                f"in_features ({self.in_features})."
+            )
+        features_per_dim: list[torch.Tensor] = []
+        logits_per_dim: list[torch.Tensor] = []
+        for stack in self.stacks:
+            features, logits = stack.forward_with_features(x)
+            features_per_dim.append(features)
+            logits_per_dim.append(logits)
+        return features_per_dim, logits_per_dim
+
 
 class _LSTMDimStack(nn.Module):
     """Single per-dimension LSTM stack + final FC head."""
@@ -319,18 +356,30 @@ class _LSTMDimStack(nn.Module):
                 nn.Dropout(dropout) if dropout > 0 else nn.Identity()
             )
             current = h
+        self.penultimate_size = current
         self.head = nn.Linear(current, num_classes)
         # MATLAB applies He init explicitly to FC layers; do the same here
         # for parity with weight-load tests (Critical Note #31).
         nn.init.kaiming_normal_(self.head.weight, nonlinearity="relu")
         nn.init.zeros_(self.head.bias)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply each LSTM (sequence mode) + dropout, then the per-timestep head."""
+    def _compute_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Run the LSTM stack + dropouts; return the penultimate features."""
         for lstm, drop in zip(self.lstms, self.dropouts):
             x = lstm(x)[0]  # (B, T, H) — sequence output
             x = drop(x)
-        return self.head(x)  # (B, T, num_classes)
+        return x
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply each LSTM (sequence mode) + dropout, then the per-timestep head."""
+        return self.head(self._compute_features(x))
+
+    def forward_with_features(
+        self, x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return ``(penultimate_features, logits)`` — used by the Task confidence head."""
+        features = self._compute_features(x)
+        return features, self.head(features)
 
 
 # ───────────────────────── Builders ─────────────────────────

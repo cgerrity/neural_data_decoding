@@ -50,6 +50,7 @@ from .models.registry import build_classifier, build_encoder
 from .training.checkpoint import has_existing_checkpoint
 from .training.freezing import build_optimizer_with_module_groups
 from .training.lifecycle import EpochHistory, fit_supervised, fit_two_stage
+from .training.losses.confidence import ConfidenceHistory
 from .training.losses.multi_objective import LossPriors
 from .training.losses.classification import inverse_frequency_class_weights
 from .training.schedules import (
@@ -236,12 +237,19 @@ def _cmd_train(args: argparse.Namespace) -> int:
     # EMA prior normalization. For Logistic/non-variational, only classification
     # is active, so the simpler weight dict suffices.
     is_variational = bool(cfg.get("is_variational", False))
+    confidence_active = is_variational and bool(
+        cfg.get("confidence_type") and float(cfg.get("weight_confidence", 0)) != 0,
+    )
+    initial_confidence_history: Optional["ConfidenceHistory"] = None
     if is_variational:
         loss_weights_dict: dict[str, float] = {
             "classification": float(cfg.weight_classification),
             "reconstruction": float(cfg.get("weight_reconstruction", 1.0)),
             "kl": float(cfg.get("weight_kl", 1.0)),
         }
+        if confidence_active:
+            loss_weights_dict["confidence"] = float(cfg.weight_confidence)
+            initial_confidence_history = ConfidenceHistory.initial(dtype=torch.float32)
         initial_priors: Optional[LossPriors] = LossPriors.initial()
     else:
         loss_weights_dict = {"classification": float(cfg.weight_classification)}
@@ -304,6 +312,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
             curriculum=curriculum,
             freeze_base_lr=float(cfg.initial_learning_rate),
             rescale_loss_epoch=int(cfg.get("rescale_loss_epoch", 0)),
+            confidence_history=initial_confidence_history,
         )
 
     final_val_acc = history[-1].val.accuracy if history and history[-1].val else None
@@ -493,6 +502,8 @@ def _build_model(
             "activation": str(cfg.activation),
             "loss_type_decoder": str(cfg.get("loss_type_decoder", "MSE")),
             "classifier_dropout": float(cfg.get("classifier_dropout", 0.5)),
+            # Confidence heads (Milestone C #7) — built when confidence_type is non-empty.
+            "confidence_type": list(cfg.get("confidence_type", [])),
         }
         return build_variational_composite(variational_cfg)
 

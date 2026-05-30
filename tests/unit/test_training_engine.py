@@ -113,7 +113,7 @@ def test_train_one_epoch_reduces_loss() -> None:
         device=torch.device("cpu"),
         loss_weights={"classification": 1.0},
     )
-    trained, _ = train_one_epoch(
+    trained, _, _ = train_one_epoch(
         model=model,
         dataloader=loader,
         optimizer=optimizer,
@@ -642,3 +642,70 @@ def test_fit_two_stage_writes_stage1_subdir(tmp_path: Path) -> None:
     # Stage 2 root has its own checkpoints.
     assert (tmp_path / CURRENT_CHECKPOINT_FILENAME).is_file()
     assert (tmp_path / OPTIMAL_CHECKPOINT_FILENAME).is_file()
+
+
+# ───────────────────────── Confidence wiring (Milestone C #7) ─────────────────────────
+
+
+def test_train_one_epoch_threads_confidence_history() -> None:
+    """When confidence is active, history is updated each iteration; Beta moves."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    from neural_data_decoding.training.loop import train_one_epoch
+    from neural_data_decoding.training.losses.confidence import ConfidenceHistory
+    from neural_data_decoding.training.losses.multi_objective import LossPriors
+
+    composite = build_variational_composite({
+        "in_features": 4, "hidden_sizes": [8, 2],
+        "num_classes_per_dim": [2, 3], "classifier_hidden_size": [4],
+        "loss_type_decoder": "MSE", "transform": "GRU",
+        "confidence_type": ["Trial", "Task"],
+    })
+    ds = SyntheticTrialDataset(
+        num_sessions=1, trials_per_session=4,
+        num_samples=5, num_features=4, num_classes_per_dim=[2, 3],
+        seed=0,
+    )
+    loader = DataLoader(ds, batch_size=2, collate_fn=collate_trials)
+    optimizer = torch.optim.AdamW(composite.parameters(), lr=0.01)
+    initial_history = ConfidenceHistory.initial(dtype=torch.float32)
+
+    _, _, new_history = train_one_epoch(
+        model=composite,
+        dataloader=loader,
+        optimizer=optimizer,
+        device=torch.device("cpu"),
+        loss_weights={
+            "classification": 1.0, "reconstruction": 1.0,
+            "kl": 0.01, "confidence": 1.0,
+        },
+        loss_priors=LossPriors.initial(),
+        confidence_history=initial_history,
+    )
+
+    assert new_history is not None
+    # Beta has been updated (almost certainly differs from initial 1.0
+    # after a forward pass of randomly-initialized confidence heads, which
+    # start producing roughly-mid outputs → batch mean ≠ 0.5).
+    assert isinstance(new_history.beta, torch.Tensor)
+    # EMA total has been updated (≠ initial 1.0).
+    assert float(new_history.total) != 1.0
+
+
+def test_train_one_epoch_without_confidence_returns_none_history() -> None:
+    """When no confidence_history is passed, third return value is None."""
+    from neural_data_decoding.training.loop import train_one_epoch
+
+    ds = SyntheticTrialDataset(
+        num_sessions=1, trials_per_session=2,
+        num_samples=3, num_features=2, num_classes_per_dim=[2],
+        seed=0,
+    )
+    loader = DataLoader(ds, batch_size=2, collate_fn=collate_trials)
+    model = MultiHeadClassifier(in_features=2, num_classes_per_dim=[2])
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+    _, _, history = train_one_epoch(
+        model=model, dataloader=loader, optimizer=optimizer,
+        device=torch.device("cpu"),
+        loss_weights={"classification": 1.0},
+    )
+    assert history is None

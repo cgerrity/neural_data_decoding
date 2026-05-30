@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **420 passed, 4 deselected** by default; **4 passed** under
+Expected: **445 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -83,7 +83,7 @@ neural_data_decoding/
 | 0 — Foundation | ✅ Complete | Stratification: element-for-element MATLAB |
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
-| C — Full Optimal VAE | 🚧 **Core + curriculum + two-stage lifecycle complete**; confidence-in-training-path / MIL-in-training-path / accumulation table still pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; curriculum interpolator ~1e-12 |
+| C — Full Optimal VAE | 🚧 **Core + curriculum + two-stage + confidence routing complete**; MIL-in-training-path / accumulation table / Eq. 2 interpolated CE still pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12 |
 | CC — Extra-credit features | ⏳ Pending |  |
 | D — Cluster deployment | ⏳ Pending |  |
 
@@ -148,6 +148,32 @@ Milestone C status — what's done
   shows augmentation, weights, and freeze ticking as expected and
   the train loss collapsing right when the classifier unfreezes
   at epoch 11.
+- **Confidence routing in variational forward path** (Milestone C #7) —
+  the kernel (`apply_confidence_routing`) was already 1e-10 parity-verified
+  in C #5; this milestone wired it through the model + loss orchestrator.
+  New `TrialConfidenceHead` (FC + sigmoid from Z), new `TaskConfidenceHead`
+  (parallel FC + sigmoid per output dim, consuming the classifier's
+  penultimate features via the new `DeepLSTMClassifier.forward_with_features`).
+  `VariationalOutput` gained optional `trial_confidence` / `task_confidence`
+  fields; `VariationalComposite` populates them when the heads are built.
+  Builder reads `cfg.confidence_type` (case-insensitive, accepts list or
+  bare string). The `Confidence_Beta` P-controller is now part of
+  `ConfidenceHistory`: a separate MATLAB fixture probes
+  `cgg_getConfidenceLossInformation` across three batches and pins Beta
+  to ~1e-12 (also covers MATLAB subtlety where the Beta update uses the
+  FULL-tensor mean of TotalConfidence, not the last-timestep mean the
+  EMA path uses). `train_one_epoch` threads `ConfidenceHistory` across
+  iterations (like `LossPriors`), advancing Beta + EMAs per batch and
+  passing the live Beta to `aggregate_normalized_losses.confidence_beta`.
+  `C_optimal_synthetic.yaml` now enables `confidence_type: ['Trial', 'Task']`
+  and `weight_confidence: 1`; smoke run completes 20 epochs with the
+  confidence loss visible in training (and the model converging modestly
+  slower vs. no-confidence, as expected with the extra signal). NOTE:
+  Eq. 2 prediction-to-truth interpolation (`y_interpolated`) is computed
+  by the kernel but NOT yet wired through the classification loss
+  (`apply_confidence_routing(compute_interpolation=False)` in the
+  orchestrator); per-dim interpolated cross-entropy is deferred to a
+  follow-up.
 - **Full two-stage lifecycle** (Milestone C #6) — port of MATLAB's
   `cgg_trainAllAutoEncoder_v2`. Pythonic state machine, **not**
   file-existence branches: `fit_unsupervised` (Stage 1 — encoder +
@@ -168,21 +194,23 @@ Milestone C status — what's done
 
 ## Next up — Milestone C polish / cleanup, then CC or D
 
-Milestone C's *active production path* is now end-to-end runnable. What
-remains is integration of features whose kernels exist but aren't yet
-woven into the variational forward path, plus hardware-aware tuning:
+Milestone C's *active production path* is now end-to-end runnable
+including confidence routing. What remains is integration of features
+whose kernels exist but aren't yet woven into the variational forward
+path, plus hardware-aware tuning and the final Eq. 2 polish:
 
-### Option A — Milestone C #7: confidence routing in the variational forward path
+### Option A — Milestone C #7b: Eq. 2 interpolated cross-entropy
 
-The confidence PD-controller kernel (`apply_confidence_routing`) is
-parity-verified to ~1e-10 against MATLAB but is NOT yet called from
-`VariationalComposite.forward`. The kernel needs:
-- A `confidence_head` attribute on the composite (per-trial + per-task
-  confidence outputs) — small extra classifier head.
-- The forward to interpolate logits via the routing math.
-- The loss orchestrator to plumb `WeightConfidence` and the
-  `ConfidenceHistory` state across iterations.
-- Smoke run with `confidence_type: ["Trial", "Task"]` enabled.
+Currently `train_one_epoch` calls `apply_confidence_routing` with
+`compute_interpolation=False` — the Trial/Task/Total losses and Beta
+flow through correctly, but the classification cross-entropy still uses
+raw logits (not the confidence-weighted interpolation). For exact
+MATLAB parity on the classification gradient signal, add per-dim
+interpolated cross-entropy: for each output dim `d` with predicted
+probability `p_target_d` (via softmax on logits_d), confidence weight
+`c = total_dropped_d`, the loss is `-mean(log(c * p_target_d + (1-c)))`
+instead of the standard `-mean(log(p_target_d))`. Small kernel addition
+to `losses/classification.py`; small touch in `train_one_epoch`.
 
 ### Option B — Milestone C #8: MIL softmax pooling in the variational forward path
 
@@ -261,8 +289,8 @@ Parity fixtures live at `tests/fixtures/golden_weights/*.mat` (gitignored).
 Regenerate any one with `matlab -batch "run('scripts/generate_t2_<name>_fixture.m')"`
 or all of Milestone N's via `python scripts/prepare_golden_fixtures.py --milestone N`.
 Current generators: stratification, T2 encoder (GRU+LSTM), T2 composite,
-T2 ELBO, T2 MIL softmax, T2 confidence, T2 dynamic-schedule interpolator,
-CM_Table conversion.
+T2 ELBO, T2 MIL softmax, T2 confidence, T2 confidence Beta,
+T2 dynamic-schedule interpolator, CM_Table conversion.
 
 ## See also
 

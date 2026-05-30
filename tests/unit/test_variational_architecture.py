@@ -348,3 +348,88 @@ def test_copy_autoencoder_weights_leaves_classifier_alone() -> None:
     for name, p in full.classifier.named_parameters():
         assert torch.equal(p, classifier_snapshot[name]), \
             f"Classifier parameter {name} was modified by autoencoder weight copy."
+
+
+# ───────────────────────── VariationalComposite with confidence heads (Milestone C #7) ─────────────────────────
+
+
+def _conf_cfg(*, confidence_type: list[str] | str | None) -> dict:
+    cfg = {
+        "in_features": 8,
+        "hidden_sizes": [16, 4],
+        "num_classes_per_dim": [3, 4],
+        "classifier_hidden_size": [4],
+        "loss_type_decoder": "MSE",
+        "transform": "GRU",
+        "confidence_type": confidence_type,
+    }
+    return cfg
+
+
+def test_composite_without_confidence_keeps_existing_contract() -> None:
+    """No confidence_type → no heads built; VariationalOutput's confidence fields are None."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    composite = build_variational_composite(_conf_cfg(confidence_type=None))
+    assert composite.trial_confidence_head is None
+    assert composite.task_confidence_head is None
+    out = composite(torch.zeros(2, 5, 8))
+    assert out.trial_confidence is None
+    assert out.task_confidence is None
+
+
+def test_composite_with_trial_confidence_only() -> None:
+    """confidence_type=['Trial'] builds only the Trial head."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    composite = build_variational_composite(_conf_cfg(confidence_type=["Trial"]))
+    assert composite.trial_confidence_head is not None
+    assert composite.task_confidence_head is None
+    out = composite(torch.zeros(2, 5, 8))
+    assert out.trial_confidence is not None
+    assert out.trial_confidence.shape == (2, 5, 1)
+    assert out.task_confidence is None
+
+
+def test_composite_with_task_confidence_only() -> None:
+    """confidence_type=['Task'] builds only the Task head."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    composite = build_variational_composite(_conf_cfg(confidence_type=["Task"]))
+    assert composite.trial_confidence_head is None
+    assert composite.task_confidence_head is not None
+    out = composite(torch.zeros(2, 5, 8))
+    assert out.trial_confidence is None
+    assert out.task_confidence is not None
+    # num_dims = 2 (matches num_classes_per_dim).
+    assert out.task_confidence.shape == (2, 5, 2)
+
+
+def test_composite_with_both_confidence_types() -> None:
+    """confidence_type=['Trial', 'Task'] builds both heads in parallel."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    composite = build_variational_composite(
+        _conf_cfg(confidence_type=["Trial", "Task"]),
+    )
+    assert composite.trial_confidence_head is not None
+    assert composite.task_confidence_head is not None
+    out = composite(torch.zeros(2, 5, 8))
+    assert out.trial_confidence is not None
+    assert out.task_confidence is not None
+    # Classification logits unchanged by confidence presence.
+    assert len(out.logits) == 2
+    assert out.logits[0].shape == (2, 5, 3)
+
+
+def test_composite_with_string_confidence_type_works() -> None:
+    """confidence_type='Trial' (bare string) is accepted (MATLAB sometimes passes single)."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    composite = build_variational_composite(_conf_cfg(confidence_type="Trial"))
+    assert composite.trial_confidence_head is not None
+    assert composite.task_confidence_head is None
+
+
+def test_composite_confidence_type_is_case_insensitive() -> None:
+    """'trial' and 'TRIAL' are equivalent to 'Trial' for the config parser."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    a = build_variational_composite(_conf_cfg(confidence_type=["trial"]))
+    b = build_variational_composite(_conf_cfg(confidence_type=["TRIAL"]))
+    assert a.trial_confidence_head is not None
+    assert b.trial_confidence_head is not None
