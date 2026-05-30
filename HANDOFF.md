@@ -129,25 +129,71 @@ Milestone C status — what's done
 
 ## Next up — Milestone C #5 (dynamic curriculum schedules)
 
-Wire the curriculum classes that drive the augmentation magnitudes, loss
-weights, and freeze decisions per epoch (per Critical Notes #7, #8):
+Per Critical Notes #7, #8. Three sibling schedules driving augmentation,
+loss weights, and freeze decisions; all sharing one piecewise-linear
+interpolator (`cgg_calculateDynamicValue`).
 
-- **LoadParameters / load_schedule.py** — augmentation magnitudes the
-  Dataset reads live each `__getitem__` (not snapshotted per epoch).
-- **WeightParameters / weight_schedule.py** — per-epoch loss weights
-  (drives KL annealing — Critical Note: `WeightDelayEpoch` / `WeightEpochRamp`).
-- **FreezeParameters / freeze_schedule.py** — per-network freeze
-  magnitudes (`cgg_setFrozenNetwork_v2`, Critical Note #4).
-- All schedules port `cgg_calculateDynamicValue` (piecewise-linear
-  interpolation between waypoints).
-- Add `RescaleLossEpoch` cadence to the training loop so EMA prior
-  updates respect the configured cadence (0=every iter, 1=per epoch,
-  >1=every N epochs).
+### First step — 5-pass read of these MATLAB files
 
-After #5: **#6 — full two-stage lifecycle** (Stage 1 unsupervised
-pre-training with `NumEpochsAutoEncoder > 0`, then Stage 2 supervised
-with the classifier added). Plus KL annealing and hardware-aware
-accumulation table.
+(See the `feedback-matlab-reference` memory for the read-pass discipline.
+The user explicitly asked for ~5 passes on high-risk ports; these
+qualify.)
+
+1. `Processing_Functions_cgg/Parameters/PARAMETERS_cgg_selectDynamicParameters.m`
+   — defines the `'Soft Three-Stage Curriculum - Shortened'`
+   waypoint sets.
+2. `Processing_Functions_cgg/ANN Functions/Training Functions/cgg_calculateDynamicValue.m`
+   — the piecewise-linear interpolator every schedule uses.
+3. `Processing_Functions_cgg/ANN Functions/Training Functions/cgg_generateLoadParameters_v2.m`
+   — augmentation-magnitude schedule.
+4. `Processing_Functions_cgg/ANN Functions/Training Functions/cgg_generateLossWeights_v2.m`
+   — per-epoch loss weights (drives KL annealing).
+5. `Processing_Functions_cgg/ANN Functions/Training Functions/cgg_generateFreezeParameters.m`
+   — per-network freeze magnitudes.
+6. The call sites in `cgg_trainNetwork.m` (look for
+   `cgg_setFrozenNetwork_v2` and the augmentation-read pattern in the
+   data pipeline — Critical Note #8 mandates live-read at
+   `__getitem__`, NOT snapshot per epoch).
+
+### Concrete first chunk
+
+| File | Status |
+|---|---|
+| `src/neural_data_decoding/training/schedules/base.py` | New — abstract `Schedule` base + `piecewise_linear_value(epoch, waypoints)` helper |
+| `src/neural_data_decoding/training/schedules/load.py` | New — `LoadSchedule` with `current_*` properties read by the Dataset |
+| `src/neural_data_decoding/training/schedules/weights.py` | New — `WeightSchedule` (KL annealing built-in: `WeightDelayEpoch` + `WeightEpochRamp`) |
+| `src/neural_data_decoding/training/schedules/freeze.py` | New — `FreezeSchedule` + `apply_freeze_schedule(net, schedule, epoch)` helper |
+| `data/dataset.py::SyntheticTrialDataset` | Modify — accept optional `load_schedule` and read magnitudes live in `__getitem__` |
+| `training/loop.py` | Modify — call `schedule.update(epoch)` at epoch start; thread freeze application |
+| `configs/schedule/soft_three_stage_curriculum_shortened.yaml` | New — waypoint table per `PARAMETERS_cgg_selectDynamicParameters` |
+| `tests/parity/test_t2_dynamic_schedules.py` | New — fixture-based parity (per-epoch values vs MATLAB; one fixture per schedule type) |
+| `tests/unit/test_schedules.py` | New — piecewise-linear edge cases, live-read contract |
+
+### Also fold in
+
+- `RescaleLossEpoch` cadence in the training loop so the EMA-prior update
+  respects `0`/`1`/`>1` cadence (currently always updates).
+- Augmentation re-randomization per `__getitem__` (Critical Note #7) is
+  already correct via the existing `rng` per-trial draw; the new piece
+  is that the **magnitudes** themselves come from the live schedule.
+
+### What "done" looks like
+
+Smoke run with the curriculum config enabled, augmentation magnitudes
+visibly tick across epochs (`STDChannelOffset` etc. logged via
+`epoch_callback`), KL weight ramps from 0 → 1 between epochs
+`WeightDelayEpoch` and `WeightDelayEpoch + WeightEpochRamp`, and at
+least one per-network freeze waypoint takes effect. Parity tests pin
+per-epoch schedule values to ~1e-10 against MATLAB.
+
+### After #5
+
+**#6 — full two-stage lifecycle**: Stage 1 unsupervised pre-training
+(`NumEpochsAutoEncoder > 0`) handing off Optimal autoencoder weights to
+Stage 2 supervised (which adds the classifier). Plus KL annealing
+integration, hardware-aware accumulation table (Note #18), and the
+`needReshape` / OutputBlock plumbing if real-data inputs (SSCTB) arrive
+during this work.
 
 ## Quick command reference
 
@@ -160,13 +206,6 @@ python -m neural_data_decoding train --config-name C_optimal_synthetic --fold 1
 # Pre-flight check (refuses to clobber existing checkpoints).
 python -m neural_data_decoding check-existing --config-name C_optimal_synthetic --fold 1
 ```
-
-Remaining Milestone C items after #3, in order:
-- **#4 — EMA prior normalization** + variational training integration so the
-  CLI can run a Stochastic VAE end-to-end (currently the composite exists
-  but isn't wired into `train_one_epoch`).
-- **#5 — Dynamic curriculum schedules** (load / loss-weight / freeze).
-- **#6 — Full two-stage lifecycle** (KL annealing, hardware-aware accumulation).
 
 ## Conventions
 
@@ -183,6 +222,15 @@ Remaining Milestone C items after #3, in order:
 - **Docstrings**: NumPy convention, class docstring carries the
   `Parameters` section (not `__init__`). `interrogate --fail-under=100`
   enforces it (config in `pyproject.toml`).
+- **MATLAB is behavioral reference, not a syntactic blueprint.** Port
+  for semantics; pick the most Pythonic expression of the same observable
+  behavior. Example: MATLAB's `if IsOptimal { save_validation;
+  save_test }` → Python `on_optimal_callback` hook fired only on a new
+  best — same semantics, cleaner separation. Verify parity empirically
+  against fixtures; **don't trust the plan's numeric example values**
+  (Critical Note #38's `mask.sum()` denominator was wrong; the empirical
+  MATLAB probe caught it). For high-risk ports, do ~5 passes of the
+  MATLAB source including the call sites.
 
 ## Regenerating MATLAB fixtures
 
