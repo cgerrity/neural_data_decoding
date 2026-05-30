@@ -22,7 +22,7 @@ the MATLAB sources are referenced for parity testing only.
   `Processing_Functions_cgg/`. The fallbacks try the parent of the project
   root (legacy layout) and a known absolute path; if neither works the
   fixture scripts error clearly.
-- **Tests:** `python -m pytest` runs the default 409 tests in ~3s. MATLAB-gated
+- **Tests:** `python -m pytest` runs the default 420 tests in ~3s. MATLAB-gated
   parity (`-m needs_matlab`) needs a MATLAB executable + the source root
   resolvable.
 - **Static checking:** `pyright` runs project-wide with zero errors. The
@@ -33,27 +33,30 @@ the MATLAB sources are referenced for parity testing only.
 
 ## Status & next step
 
-- Milestones 0 / A / B complete; Milestone C **core + curriculum
-  schedules** complete (VAE sampling, NaN mask, ELBO, MIL softmax,
-  variational composite, confidence PD-controller, EMA prior
+- Milestones 0 / A / B complete; Milestone C **core + curriculum +
+  two-stage lifecycle** complete (VAE sampling, NaN mask, ELBO, MIL
+  softmax, variational composite, confidence PD-controller, EMA prior
   normalization, variational training integration, dynamic curriculum
   schedules with per-module freeze + live-read augmentation +
-  RescaleLossEpoch cadence) and end-to-end smoke-runnable.
+  RescaleLossEpoch cadence, full two-stage Stage 1 → handoff → Stage 2
+  with config-driven KL annealing) and end-to-end smoke-runnable.
 - Single-step T2 forward parity against MATLAB: ~1e-9 (composite
   forward), ~1e-10 (confidence kernel), 1e-6 (ELBO + MIL + sampling),
   ~1e-12 (curriculum interpolator + preset library).
-- All three target_milestone configs (A / B / C) run end-to-end on
-  synthetic data and write both `CM_Table_Validation.mat` (during
-  training) and `CM_Table.mat` (from the Optimal weights on the
-  held-out test set). C_optimal_synthetic now uses the
-  `Soft Three-Stage Curriculum - Shortened` regime and shows visible
-  per-epoch ticking of augmentation, weights, and freeze factors.
-- **Next step is Milestone C #6 — full two-stage lifecycle** with
-  `NumEpochsAutoEncoder > 0` (Stage 1 unsupervised pre-training handing
-  off Optimal encoder weights to Stage 2 supervised), plus KL annealing
-  wiring (the `KLBaseAnneal` helper exists but isn't yet config-driven),
-  and the hardware-aware accumulation table (Note #18). See `HANDOFF.md`
-  "Next up".
+- All four target_milestone configs (A / B / C_optimal /
+  C_two_stage) run end-to-end on synthetic data and write both
+  `CM_Table_Validation.mat` (during training) and `CM_Table.mat` (from
+  the Optimal weights on the held-out test set). C_two_stage_synthetic
+  runs 5 epochs unsupervised → loads Optimal autoencoder weights →
+  builds composite + classifier → runs 15 epochs supervised, with KL
+  annealing visible in Stage 2 epochs 2-5 and the curriculum taking
+  over at epochs 10+.
+- **Next step is Milestone C polish / cleanup or jump to CC/D.** Four
+  options (see `HANDOFF.md` "Next up" for full descriptions):
+  - **C #7**: confidence routing in the variational forward path.
+  - **C #8**: MIL softmax pooling in the variational forward path.
+  - **C accumulation**: hardware-aware gradient accumulation table.
+  - **CC** (extra-credit features) or **D** (cluster deployment).
 
 ## Conventions to follow
 

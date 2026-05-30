@@ -5,17 +5,16 @@ implementing a variational autoencoder + multi-head classifier for multi-probe
 ephys data. Reproduces the active production path in modern PyTorch while writing
 `.mat`-compatible output where MATLAB-side analysis still consumes it.
 
-> **Status: Milestone C core + curriculum schedules complete; A/B/C all smoke-runnable end-to-end.**
+> **Status: Milestone C core + curriculum + two-stage lifecycle complete; A/B/C all smoke-runnable end-to-end.**
 > Milestones 0 (foundation), A (logistic tracer), B (GRU + classifier), and
 > Milestone C's variational core (VAE sampling + ELBO + confidence
 > PD-controller + MIL pooling + EMA prior normalization + variational training
-> integration + **dynamic curriculum schedules**) are done. Remaining for C:
-> full two-stage lifecycle (Stage 1 unsupervised pre-training handing off
-> Optimal autoencoder weights to Stage 2 supervised), integration of
-> confidence + MIL into the variational forward path. T2 parity against MATLAB
-> verified to ~1e-9 (composite forward), ~1e-10 (confidence kernel),
-> 1e-6 (ELBO + MIL + sampling), ~1e-12 (curriculum interpolator). See
-> [`docs/PLAN.md`](docs/PLAN.md) for the full migration plan.
+> integration + dynamic curriculum schedules + **full two-stage lifecycle
+> with KL annealing**) are done. Remaining for C: integration of confidence +
+> MIL into the variational forward path, hardware-aware accumulation. T2
+> parity against MATLAB verified to ~1e-9 (composite forward), ~1e-10
+> (confidence kernel), 1e-6 (ELBO + MIL + sampling), ~1e-12 (curriculum
+> interpolator). See [`docs/PLAN.md`](docs/PLAN.md) for the full migration plan.
 
 ## Quickstart
 
@@ -49,6 +48,12 @@ python -m neural_data_decoding train --config-name B_gru_classifier_synthetic --
 # classification; both validation and test CM_Tables written.
 python -m neural_data_decoding train --config-name C_optimal_synthetic --fold 1
 
+# Milestone C — full two-stage lifecycle: 5 epochs Stage 1 unsupervised
+# pre-training (autoencoder only) → Optimal autoencoder weights handed off
+# into a fresh composite → 15 epochs Stage 2 supervised fine-tuning. KL
+# anneal applied per-stage.
+python -m neural_data_decoding train --config-name C_two_stage_synthetic --fold 1
+
 # Pre-flight check (aborts if a prior run's checkpoints would be clobbered).
 python -m neural_data_decoding check-existing --config-name C_optimal_synthetic --fold 1
 ```
@@ -78,7 +83,8 @@ cluster-equivalent paths.
 | `CM_Table.mat` + stable-schema `EncodingParameters.yaml` output | ✅ T4 round-trip parity |
 | MATLAB → PyTorch weight conversion (GRU/LSTM/FC) | ✅ |
 | VAE sampling, ELBO, confidence, MIL, curriculum schedules | ✅ Milestone C core |
-| Full two-stage lifecycle, confidence-in-training-forward | 🚧 Milestone C #6 |
+| Full two-stage lifecycle + KL annealing | ✅ Milestone C #6 |
+| Confidence + MIL in variational forward path | 🚧 Milestone C polish |
 
 ### Parity precision achieved (T2 single-step forward pass)
 
@@ -125,7 +131,7 @@ python -m pytest
 python -m pytest -m needs_matlab
 ```
 
-Currently **409 tests pass** in the default suite (plus 4 MATLAB-gated parity
+Currently **420 tests pass** in the default suite (plus 4 MATLAB-gated parity
 tests that run with `-m needs_matlab`).
 
 Parity tests compare against MATLAB-generated reference fixtures. Those fixtures

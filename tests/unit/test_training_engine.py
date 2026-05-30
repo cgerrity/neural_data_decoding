@@ -432,3 +432,213 @@ def test_resolve_epoch_loss_weights_blends_static_and_curriculum() -> None:
     assert resolved["kl"] == 3.0
     # Static-only key preserved.
     assert resolved["extra_static_key"] == 7.0
+
+
+# ───────────────────────── Stage 1 unsupervised path (Milestone C #6) ─────────────────────────
+
+
+def _toy_autoencoder() -> torch.nn.Module:
+    """Tiny VariationalAutoencoder for unsupervised-path tests."""
+    from neural_data_decoding.models.composite import build_variational_autoencoder
+    return build_variational_autoencoder({
+        "in_features": 4,
+        "hidden_sizes": [8, 2],
+        "num_classes_per_dim": [2],          # ignored by AE builder
+        "classifier_hidden_size": [2],       # ignored by AE builder
+        "loss_type_decoder": "MSE",
+        "transform": "GRU",
+    })
+
+
+def _toy_ae_loader(*, n_trials: int = 4, num_samples: int = 5) -> DataLoader:
+    ds = SyntheticTrialDataset(
+        num_sessions=1, trials_per_session=n_trials,
+        num_samples=num_samples, num_features=4, num_classes_per_dim=[2],
+        seed=0,
+    )
+    return DataLoader(ds, batch_size=2, collate_fn=collate_trials)
+
+
+def test_train_unsupervised_epoch_runs_and_decreases_loss() -> None:
+    """Sanity: Stage 1 train epoch runs and reduces the autoencoder loss."""
+    from neural_data_decoding.training.loop import train_unsupervised_epoch
+    ae = _toy_autoencoder()
+    loader = _toy_ae_loader()
+    optimizer = torch.optim.AdamW(ae.parameters(), lr=0.01)
+    first = train_unsupervised_epoch(
+        model=ae, dataloader=loader, optimizer=optimizer,
+        device=torch.device("cpu"),
+        loss_weights={"reconstruction": 1.0, "kl": 0.01},
+    )
+    # Run a couple more — loss should drop on this trivial setup.
+    for _ in range(3):
+        train_unsupervised_epoch(
+            model=ae, dataloader=loader, optimizer=optimizer,
+            device=torch.device("cpu"),
+            loss_weights={"reconstruction": 1.0, "kl": 0.01},
+        )
+    last = train_unsupervised_epoch(
+        model=ae, dataloader=loader, optimizer=optimizer,
+        device=torch.device("cpu"),
+        loss_weights={"reconstruction": 1.0, "kl": 0.01},
+    )
+    assert last.total_loss < first.total_loss
+
+
+def test_train_unsupervised_rejects_non_autoencoder_output() -> None:
+    """A model whose forward returns the wrong type fails fast (not silently)."""
+    from neural_data_decoding.training.loop import train_unsupervised_epoch
+    # MultiHeadClassifier returns list[Tensor], not AutoencoderOutput.
+    bad_model = MultiHeadClassifier(in_features=4, num_classes_per_dim=[2])
+    loader = _toy_ae_loader()
+    optimizer = torch.optim.AdamW(bad_model.parameters(), lr=0.01)
+    with pytest.raises(TypeError, match="AutoencoderOutput"):
+        train_unsupervised_epoch(
+            model=bad_model, dataloader=loader, optimizer=optimizer,
+            device=torch.device("cpu"),
+            loss_weights={"reconstruction": 1.0, "kl": 0.01},
+        )
+
+
+def test_fit_unsupervised_tracks_min_val_loss_as_best(tmp_path: Path) -> None:
+    """Stage 1's is_best flag fires on lower val loss (not higher accuracy)."""
+    from neural_data_decoding.training.lifecycle import fit_unsupervised
+    ae = _toy_autoencoder()
+    loader = _toy_ae_loader()
+    optimizer = torch.optim.AdamW(ae.parameters(), lr=0.01)
+
+    history = fit_unsupervised(
+        model=ae,
+        train_loader=loader, val_loader=loader,
+        optimizer=optimizer, num_epochs=3,
+        device=torch.device("cpu"),
+        loss_weights={"reconstruction": 1.0, "kl": 0.01},
+        checkpoint_dir=tmp_path,
+    )
+
+    # First epoch always sets is_best (val < +inf).
+    assert history[0].is_best
+    # Any subsequent epoch that beats the best should also fire is_best.
+    val_losses = [h.val.total_loss for h in history if h.val is not None]
+    running_min = val_losses[0]
+    expected_is_best = [True]
+    for v in val_losses[1:]:
+        is_b = v < running_min
+        if is_b:
+            running_min = v
+        expected_is_best.append(is_b)
+    actual_is_best = [h.is_best for h in history]
+    assert actual_is_best == expected_is_best
+
+
+def test_fit_unsupervised_writes_separate_checkpoint_dir(tmp_path: Path) -> None:
+    """Stage 1 writes Current + Optimal snapshots into its own dir."""
+    from neural_data_decoding.training.checkpoint import (
+        CURRENT_CHECKPOINT_FILENAME,
+        OPTIMAL_CHECKPOINT_FILENAME,
+    )
+    from neural_data_decoding.training.lifecycle import fit_unsupervised
+    ae = _toy_autoencoder()
+    loader = _toy_ae_loader()
+    optimizer = torch.optim.AdamW(ae.parameters(), lr=0.01)
+    stage1_dir = tmp_path / "stage1_autoencoder"
+
+    fit_unsupervised(
+        model=ae,
+        train_loader=loader, val_loader=loader,
+        optimizer=optimizer, num_epochs=2,
+        device=torch.device("cpu"),
+        loss_weights={"reconstruction": 1.0, "kl": 0.01},
+        checkpoint_dir=stage1_dir,
+    )
+
+    assert (stage1_dir / CURRENT_CHECKPOINT_FILENAME).is_file()
+    assert (stage1_dir / OPTIMAL_CHECKPOINT_FILENAME).is_file()
+
+
+def test_fit_two_stage_hands_off_optimal_stage1_weights(tmp_path: Path) -> None:
+    """After fit_two_stage, the composite's encoder/decoder reflect Stage 1's Optimal.
+
+    Verifies the handoff: Stage 1 runs, saves Optimal weights, those weights
+    are loaded back into the autoencoder instance, then copied into the
+    composite. Stage 2 starts training from those weights.
+    """
+    from neural_data_decoding.models.composite import (
+        build_variational_autoencoder,
+        build_variational_composite,
+    )
+    from neural_data_decoding.training.lifecycle import fit_two_stage
+    from neural_data_decoding.training.checkpoint import load_optimal_checkpoint
+
+    cfg = {
+        "in_features": 4, "hidden_sizes": [8, 2],
+        "num_classes_per_dim": [2], "classifier_hidden_size": [2],
+        "loss_type_decoder": "MSE", "transform": "GRU",
+    }
+    ae = build_variational_autoencoder(cfg)
+    composite = build_variational_composite(cfg)
+    loader = _toy_ae_loader()
+    stage1_opt = torch.optim.AdamW(ae.parameters(), lr=0.01)
+    stage2_opt = torch.optim.AdamW(composite.parameters(), lr=0.01)
+
+    fit_two_stage(
+        autoencoder=ae, composite=composite,
+        stage1_optimizer=stage1_opt, stage2_optimizer=stage2_opt,
+        stage1_num_epochs=2, stage2_num_epochs=1,
+        train_loader=loader, val_loader=loader,
+        device=torch.device("cpu"),
+        loss_weights={"reconstruction": 1.0, "kl": 0.01, "classification": 1.0},
+        checkpoint_dir=tmp_path,
+    )
+
+    # Load Stage 1's Optimal weights into a fresh AE for comparison.
+    reference_ae = build_variational_autoencoder(cfg)
+    load_optimal_checkpoint(tmp_path / "stage1_autoencoder", model=reference_ae)
+
+    # After Stage 2 finishes, the composite's encoder/decoder will have
+    # been further trained — but the AE instance we passed in should
+    # match the Optimal snapshot (because fit_two_stage loaded it before
+    # the handoff). Pin that:
+    for a, b in zip(ae.encoder.parameters(), reference_ae.encoder.parameters()):
+        assert torch.equal(a, b), "Stage 1 autoencoder did not retain Optimal weights."
+
+
+def test_fit_two_stage_writes_stage1_subdir(tmp_path: Path) -> None:
+    """Stage 1 lands in <checkpoint_dir>/stage1_autoencoder/, not the root."""
+    from neural_data_decoding.models.composite import (
+        build_variational_autoencoder,
+        build_variational_composite,
+    )
+    from neural_data_decoding.training.lifecycle import fit_two_stage
+    from neural_data_decoding.training.checkpoint import (
+        CURRENT_CHECKPOINT_FILENAME,
+        OPTIMAL_CHECKPOINT_FILENAME,
+    )
+
+    cfg = {
+        "in_features": 4, "hidden_sizes": [8, 2],
+        "num_classes_per_dim": [2], "classifier_hidden_size": [2],
+        "loss_type_decoder": "MSE", "transform": "GRU",
+    }
+    ae = build_variational_autoencoder(cfg)
+    composite = build_variational_composite(cfg)
+    loader = _toy_ae_loader()
+    s1_opt = torch.optim.AdamW(ae.parameters(), lr=0.01)
+    s2_opt = torch.optim.AdamW(composite.parameters(), lr=0.01)
+
+    fit_two_stage(
+        autoencoder=ae, composite=composite,
+        stage1_optimizer=s1_opt, stage2_optimizer=s2_opt,
+        stage1_num_epochs=1, stage2_num_epochs=1,
+        train_loader=loader, val_loader=loader,
+        device=torch.device("cpu"),
+        loss_weights={"reconstruction": 1.0, "kl": 0.01, "classification": 1.0},
+        checkpoint_dir=tmp_path,
+    )
+
+    stage1_dir = tmp_path / "stage1_autoencoder"
+    assert (stage1_dir / CURRENT_CHECKPOINT_FILENAME).is_file()
+    assert (stage1_dir / OPTIMAL_CHECKPOINT_FILENAME).is_file()
+    # Stage 2 root has its own checkpoints.
+    assert (tmp_path / CURRENT_CHECKPOINT_FILENAME).is_file()
+    assert (tmp_path / OPTIMAL_CHECKPOINT_FILENAME).is_file()

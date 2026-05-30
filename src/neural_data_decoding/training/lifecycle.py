@@ -63,13 +63,26 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from neural_data_decoding.models.composite import (
+    VariationalAutoencoder,
+    VariationalComposite,
+    copy_autoencoder_weights,
+)
 from neural_data_decoding.training.checkpoint import (
     load_current_checkpoint,
+    load_optimal_checkpoint,
     save_current_checkpoint,
     save_optimal_checkpoint,
 )
 from neural_data_decoding.training.freezing import apply_freeze_to_optimizer
-from neural_data_decoding.training.loop import EpochMetrics, train_one_epoch, validate
+from neural_data_decoding.training.loop import (
+    EpochMetrics,
+    UnsupervisedEpochMetrics,
+    train_one_epoch,
+    train_unsupervised_epoch,
+    validate,
+    validate_unsupervised,
+)
 from neural_data_decoding.training.losses.multi_objective import LossPriors
 from neural_data_decoding.training.schedules import CurriculumBundle
 
@@ -293,6 +306,255 @@ def fit_supervised(
     return history
 
 
+@dataclass(slots=True)
+class UnsupervisedEpochHistory:
+    """One Stage 1 epoch's train + validation metrics, plus best-tracking.
+
+    Mirrors :class:`EpochHistory` but for Stage 1 unsupervised pre-training.
+    The ``is_best`` flag here is set on **minimum** validation loss (lower
+    is better), in contrast to Stage 2's accuracy-maximizing criterion.
+    """
+
+    epoch: int
+    train: UnsupervisedEpochMetrics
+    val: Optional[UnsupervisedEpochMetrics]
+    is_best: bool
+
+
+def fit_unsupervised(
+    *,
+    model: nn.Module,
+    train_loader: DataLoader,
+    val_loader: Optional[DataLoader],
+    optimizer: torch.optim.Optimizer,
+    num_epochs: int,
+    device: torch.device,
+    loss_weights: Mapping[str, float],
+    checkpoint_dir: Path,
+    grad_clip_norm: Optional[float] = None,
+    epoch_callback: Optional[Callable[[UnsupervisedEpochHistory], None]] = None,
+    curriculum: Optional[CurriculumBundle] = None,
+    freeze_base_lr: Optional[float] = None,
+) -> list[UnsupervisedEpochHistory]:
+    """Run Stage 1 unsupervised autoencoder pre-training.
+
+    Same shape as :func:`fit_supervised` but:
+
+    * Model produces :class:`AutoencoderOutput` (no logits).
+    * Loss is the weighted sum of reconstruction + KL only.
+    * "Best" is **min** validation loss (lower is better) — naturally
+      asymmetric with Stage 2's "max accuracy". Optimal weights are saved
+      whenever val_loss strictly drops.
+    * No EMA prior normalization (those exist to balance recon/KL against
+      classification, which is absent here).
+
+    Stage 1 owns its own ``checkpoint_dir`` (typically
+    ``<result_dir>/stage1_autoencoder/``); the caller is responsible for
+    creating that subdirectory if needed.
+
+    Parameters
+    ----------
+    See :func:`fit_supervised`. ``loss_priors``, ``prior_proportion``, and
+    ``rescale_loss_epoch`` are not accepted here — Stage 1 doesn't need
+    EMA priors.
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    resumed = load_current_checkpoint(checkpoint_dir, model=model)
+    start_epoch = resumed.epoch + 1 if resumed is not None else 0
+    # best_metric stored as a min-comparison value; +Inf so the first
+    # validation always strictly beats it.
+    best_metric = (
+        resumed.best_metric if resumed is not None else float("inf")
+    )
+    iteration = resumed.iteration if resumed is not None else 0
+
+    history: list[UnsupervisedEpochHistory] = []
+    for epoch in range(start_epoch, num_epochs):
+        if curriculum is not None:
+            curriculum.update(epoch + 1)
+            if freeze_base_lr is not None:
+                apply_freeze_to_optimizer(
+                    optimizer, curriculum.freeze, base_lr=freeze_base_lr,
+                )
+
+        epoch_loss_weights = _resolve_epoch_loss_weights(loss_weights, curriculum)
+
+        train_metrics = train_unsupervised_epoch(
+            model=model,
+            dataloader=train_loader,
+            optimizer=optimizer,
+            device=device,
+            loss_weights=epoch_loss_weights,
+            grad_clip_norm=grad_clip_norm,
+        )
+        iteration += train_metrics.num_iterations
+
+        val_metrics: Optional[UnsupervisedEpochMetrics] = None
+        is_best = False
+        if val_loader is not None:
+            val_metrics = validate_unsupervised(
+                model=model,
+                dataloader=val_loader,
+                device=device,
+                loss_weights=epoch_loss_weights,
+            )
+            if val_metrics.total_loss < best_metric:
+                best_metric = val_metrics.total_loss
+                is_best = True
+                save_optimal_checkpoint(
+                    checkpoint_dir,
+                    model=model,
+                    epoch=epoch,
+                    metric=best_metric,
+                )
+
+        save_current_checkpoint(
+            checkpoint_dir,
+            model=model,
+            epoch=epoch,
+            iteration=iteration,
+            best_metric=best_metric,
+        )
+
+        entry = UnsupervisedEpochHistory(
+            epoch=epoch, train=train_metrics, val=val_metrics, is_best=is_best,
+        )
+        history.append(entry)
+        if epoch_callback is not None:
+            epoch_callback(entry)
+
+    return history
+
+
+def fit_two_stage(
+    *,
+    autoencoder: VariationalAutoencoder,
+    composite: VariationalComposite,
+    stage1_optimizer: torch.optim.Optimizer,
+    stage2_optimizer: torch.optim.Optimizer,
+    stage1_num_epochs: int,
+    stage2_num_epochs: int,
+    train_loader: DataLoader,
+    val_loader: Optional[DataLoader],
+    device: torch.device,
+    loss_weights: Mapping[str, float],
+    checkpoint_dir: Path,
+    stage1_subdir: str = "stage1_autoencoder",
+    class_weights_per_dim: Optional[list[torch.Tensor]] = None,
+    grad_clip_norm: Optional[float] = None,
+    stage1_epoch_callback: Optional[Callable[[UnsupervisedEpochHistory], None]] = None,
+    stage2_epoch_callback: Optional[EpochCallback] = None,
+    on_optimal_callback: Optional[OnOptimalCallback] = None,
+    curriculum: Optional[CurriculumBundle] = None,
+    freeze_base_lr: Optional[float] = None,
+    rescale_loss_epoch: int = 0,
+    loss_priors: Optional[LossPriors] = None,
+    prior_proportion: float = 0.9,
+) -> tuple[list[UnsupervisedEpochHistory], list[EpochHistory]]:
+    """Stage 1 unsupervised pre-training → handoff → Stage 2 supervised.
+
+    Sequences the two stages with the Optimal Stage 1 autoencoder weights
+    handed off into Stage 2's encoder + bottleneck + decoder submodules,
+    then Stage 2 trains the full composite (autoencoder + classifier).
+
+    Stage 1 writes its checkpoints to
+    ``<checkpoint_dir>/<stage1_subdir>/``; Stage 2 uses
+    ``<checkpoint_dir>/`` directly. Resume is per-stage: re-running this
+    function with Stage 1 already complete (resume reads
+    ``stage1_subdir/`` Current snapshot) is a no-op on the unsupervised
+    side, and Stage 2 picks up where it left off independently.
+
+    Parameters
+    ----------
+    autoencoder
+        :class:`~neural_data_decoding.models.composite.VariationalAutoencoder`.
+        Trained in Stage 1; its Optimal weights are loaded back into this
+        instance after Stage 1 completes, then copied into ``composite``.
+    composite
+        :class:`~neural_data_decoding.models.composite.VariationalComposite`.
+        Receives the autoencoder weights via
+        :func:`~neural_data_decoding.models.composite.copy_autoencoder_weights`,
+        then trains in Stage 2.
+    stage1_optimizer, stage2_optimizer
+        Per-stage optimizers. Stage 2's optimizer **must** be built on the
+        composite's parameters AFTER the weight handoff would have run, so
+        the caller is responsible for ordering: build composite → call
+        ``fit_two_stage`` (the weight handoff is in-place on the
+        composite, so the optimizer's parameter references stay valid).
+    stage1_num_epochs, stage2_num_epochs
+        Target epoch counts per stage.
+    loss_weights
+        Static default weights. The curriculum's weight schedule overrides
+        component keys it knows about, per epoch, per stage.
+    checkpoint_dir
+        Base directory. Stage 1's subdir is created if missing.
+    stage1_subdir
+        Subdirectory name for Stage 1 checkpoints. Defaults to
+        ``"stage1_autoencoder"``.
+    (other params)
+        See :func:`fit_supervised` and :func:`fit_unsupervised`.
+
+    Returns
+    -------
+    tuple[list[UnsupervisedEpochHistory], list[EpochHistory]]
+        ``(stage1_history, stage2_history)``.
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+    stage1_dir = checkpoint_dir / stage1_subdir
+
+    stage1_history = fit_unsupervised(
+        model=autoencoder,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        optimizer=stage1_optimizer,
+        num_epochs=stage1_num_epochs,
+        device=device,
+        loss_weights=loss_weights,
+        checkpoint_dir=stage1_dir,
+        grad_clip_norm=grad_clip_norm,
+        epoch_callback=stage1_epoch_callback,
+        curriculum=curriculum,
+        freeze_base_lr=freeze_base_lr,
+    )
+
+    # Handoff: load Stage 1 Optimal weights into the autoencoder instance,
+    # then copy encoder/bottleneck/sampling/decoder into the composite.
+    # If no Optimal was ever written (e.g. val_loader was None), the
+    # autoencoder's in-memory weights are already the latest — skip the load.
+    optimal_loaded = load_optimal_checkpoint(stage1_dir, model=autoencoder)
+    if optimal_loaded is None and val_loader is not None:
+        # Should not happen in normal use; surface a clear warning.
+        print(
+            f"  ↳ Warning: Stage 1 finished but no Optimal snapshot at "
+            f"{stage1_dir}; handing off last-epoch weights instead."
+        )
+    copy_autoencoder_weights(autoencoder, composite)
+
+    stage2_history = fit_supervised(
+        model=composite,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        optimizer=stage2_optimizer,
+        num_epochs=stage2_num_epochs,
+        device=device,
+        loss_weights=loss_weights,
+        checkpoint_dir=checkpoint_dir,
+        class_weights_per_dim=class_weights_per_dim,
+        grad_clip_norm=grad_clip_norm,
+        epoch_callback=stage2_epoch_callback,
+        on_optimal_callback=on_optimal_callback,
+        loss_priors=loss_priors,
+        prior_proportion=prior_proportion,
+        curriculum=curriculum,
+        freeze_base_lr=freeze_base_lr,
+        rescale_loss_epoch=rescale_loss_epoch,
+    )
+
+    return stage1_history, stage2_history
+
+
 def _resolve_epoch_loss_weights(
     static_weights: Mapping[str, float],
     curriculum: Optional[CurriculumBundle],
@@ -334,5 +596,8 @@ __all__ = [
     "EpochCallback",
     "EpochHistory",
     "OnOptimalCallback",
+    "UnsupervisedEpochHistory",
     "fit_supervised",
+    "fit_two_stage",
+    "fit_unsupervised",
 ]

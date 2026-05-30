@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **409 passed, 4 deselected** by default; **4 passed** under
+Expected: **420 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -83,7 +83,7 @@ neural_data_decoding/
 | 0 — Foundation | ✅ Complete | Stratification: element-for-element MATLAB |
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
-| C — Full Optimal VAE | 🚧 **Core + curriculum schedules complete**; two-stage lifecycle / confidence-in-training-path pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; curriculum interpolator ~1e-12 |
+| C — Full Optimal VAE | 🚧 **Core + curriculum + two-stage lifecycle complete**; confidence-in-training-path / MIL-in-training-path / accumulation table still pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; curriculum interpolator ~1e-12 |
 | CC — Extra-credit features | ⏳ Pending |  |
 | D — Cluster deployment | ⏳ Pending |  |
 
@@ -148,46 +148,74 @@ Milestone C status — what's done
   shows augmentation, weights, and freeze ticking as expected and
   the train loss collapsing right when the classifier unfreezes
   at epoch 11.
+- **Full two-stage lifecycle** (Milestone C #6) — port of MATLAB's
+  `cgg_trainAllAutoEncoder_v2`. Pythonic state machine, **not**
+  file-existence branches: `fit_unsupervised` (Stage 1 — encoder +
+  bottleneck + decoder, no classifier, "best" = min val loss),
+  `fit_two_stage` orchestrator (Stage 1 → load Optimal Stage 1 weights
+  back into the AE instance → `copy_autoencoder_weights` into Stage 2
+  composite → `fit_supervised`). Separate `AutoencoderModel` +
+  `AutoencoderOutput` type (no `logits` field) keeps the types honest
+  so Stage 1 cannot accidentally compute classification math. Stage 1
+  checkpoints land in `<result_dir>/stage1_autoencoder/`; Stage 2 root.
+  Both stages resumable independently. Legacy `cgg_annealWeight` KL
+  base anneal now config-wired via `KLBaseAnneal(weight_kl,
+  weight_delay_epoch, weight_epoch_ramp)`, applied per-stage. New
+  `C_two_stage_synthetic.yaml` config smoke-runs end-to-end (Stage 1
+  reconstruction loss drops 85→36, KL ramps 0→1 in Stage 2 epochs 2-5,
+  curriculum then takes over, final val_acc 0.438 beats the C #5
+  single-stage 0.427).
 
-## Next up — Milestone C #6 (full two-stage lifecycle)
+## Next up — Milestone C polish / cleanup, then CC or D
 
-**#6 — full two-stage lifecycle**: Stage 1 unsupervised pre-training
-(`NumEpochsAutoEncoder > 0`) handing off Optimal autoencoder weights to
-Stage 2 supervised (which adds the classifier). Plus KL annealing
-integration (the `KLBaseAnneal` helper exists but isn't yet plumbed via
-the CLI config), hardware-aware accumulation table (Note #18), and the
-`needReshape` / OutputBlock plumbing if real-data inputs (SSCTB) arrive
-during this work.
+Milestone C's *active production path* is now end-to-end runnable. What
+remains is integration of features whose kernels exist but aren't yet
+woven into the variational forward path, plus hardware-aware tuning:
 
-### Where to read first (MATLAB)
+### Option A — Milestone C #7: confidence routing in the variational forward path
 
-1. `Processing_Functions_cgg/ANN Functions/cgg_trainAllAutoEncoder_v2.m`
-   — the two-stage dispatcher (lines 171-221 are the decision tree).
-2. `Processing_Functions_cgg/ANN Functions/cgg_trainNetwork.m`
-   — what runs in each stage (lines 358-366 are the freeze
-   initialization for stage 1; the rest is the unified loop already
-   ported).
-3. Any helpers around `NumEpochsAutoEncoder` to understand the
-   classifier-deferred construction path (Stage 1 is run with no
-   classifier argument, mirroring `HasClassifier=false`).
+The confidence PD-controller kernel (`apply_confidence_routing`) is
+parity-verified to ~1e-10 against MATLAB but is NOT yet called from
+`VariationalComposite.forward`. The kernel needs:
+- A `confidence_head` attribute on the composite (per-trial + per-task
+  confidence outputs) — small extra classifier head.
+- The forward to interpolate logits via the routing math.
+- The loss orchestrator to plumb `WeightConfidence` and the
+  `ConfidenceHistory` state across iterations.
+- Smoke run with `confidence_type: ["Trial", "Task"]` enabled.
 
-### Already in place from Milestone C #5
+### Option B — Milestone C #8: MIL softmax pooling in the variational forward path
 
-The curriculum schedules + freeze applier + RescaleLossEpoch cadence are
-done; the hooks they need from #6 are:
-- A clean way to run Stage 1 with classifier=None (the lifecycle layer
-  already accepts `val_loader=None` for Stage 1's "no validation" case).
-- A way to hand off Stage 1 Optimal encoder weights into the
-  Stage 2 composite. Probably a thin "stage transition" function.
+MIL softmax kernel exists and is parity-verified, but the variational
+classifier head currently emits per-timestep logits without the
+multi-axis pooling reduction. Wiring is similar to confidence: add a
+MIL-aware classifier head, smoke-test with
+`multiple_instance_learning_type: MIL`.
 
-### What "done" looks like
+### Option C — Hardware-aware accumulation table (Critical Note #18)
 
-A new `C_two_stage_synthetic.yaml` config with `num_epochs_autoencoder=5`
-and `num_epochs_full=15` runs Stage 1 unsupervised (encoder+decoder only,
-no classification loss), saves Optimal autoencoder weights, then enters
-Stage 2 with the classifier built on those weights and trains the full
-composite. Both stages share the same lifecycle code path; only the
-"which losses are active" / "which networks exist" differ.
+The CLI ignores `cfg.accumulation_information`; current code always
+uses `mini_batch_size` for the actual forward batch size. MATLAB's
+`cgg_procGradientAggregation` accumulates multiple micro-batches per
+optimizer step when the device's `MaxBatchSize` is smaller than
+`MiniBatchSize`. Implement gradient accumulation that respects the
+hardware table.
+
+### Option D — start Milestone CC (extra-credit features) or D (cluster deployment)
+
+If the deferred Milestone C items aren't blocking real-data runs, jump
+ahead to:
+- **CC**: SGDM optimizer, alternate loss types (MAE), stitching/fusion
+  layer, etc. — niceties to bring the Python port to feature-parity
+  with MATLAB's full configuration surface.
+- **D**: submitit / Ray Tune sweep launchers, GPU training, ACCRE
+  integration.
+
+### What "done" looks like across all of these
+
+Each option ends the same way: smoke-runnable target_milestone config,
+parity test where applicable (~1e-10 vs MATLAB), pyright/interrogate
+clean, HANDOFF.md + README.md updated, commit pushed.
 
 ## Quick command reference
 
@@ -196,6 +224,7 @@ composite. Both stages share the same lifecycle code path; only the
 python -m neural_data_decoding train --config-name A_logistic_synthetic --fold 1
 python -m neural_data_decoding train --config-name B_gru_classifier_synthetic --fold 1
 python -m neural_data_decoding train --config-name C_optimal_synthetic --fold 1
+python -m neural_data_decoding train --config-name C_two_stage_synthetic --fold 1
 
 # Pre-flight check (refuses to clobber existing checkpoints).
 python -m neural_data_decoding check-existing --config-name C_optimal_synthetic --fold 1

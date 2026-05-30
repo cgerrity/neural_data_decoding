@@ -270,13 +270,193 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
         encoder layer + a latent size).
     """
     try:
-        in_features = int(cfg["in_features"])
-        hidden_sizes = [int(h) for h in cfg["hidden_sizes"]]
         num_classes_per_dim = list(cfg["num_classes_per_dim"])
         classifier_hidden = [int(h) for h in cfg["classifier_hidden_size"]]
     except KeyError as exc:
         raise KeyError(
             f"build_variational_composite: missing required cfg key {exc}"
+        ) from exc
+
+    encoder, bottleneck, sampling, decoder = _build_ae_core(cfg)
+    latent = int(cfg["hidden_sizes"][-1])
+
+    classifier = DeepLSTMClassifier(
+        in_features=latent,
+        num_classes_per_dim=num_classes_per_dim,
+        hidden_sizes=classifier_hidden,
+        dropout=float(cfg.get("classifier_dropout", 0.5)),
+    )
+
+    return VariationalComposite(
+        encoder=encoder,
+        bottleneck=bottleneck,
+        sampling=sampling,
+        decoder=decoder,
+        classifier=classifier,
+    )
+
+
+@dataclass(slots=True)
+class AutoencoderOutput:
+    """Structured forward output of :class:`VariationalAutoencoder` (Stage 1).
+
+    Mirrors :class:`VariationalOutput` but **lacks the ``logits`` field**:
+    Stage 1 unsupervised pre-training literally cannot produce classification
+    logits because the model has no classifier head. The training kernel
+    that consumes this type can therefore not accidentally compute a
+    classification loss.
+
+    Attributes
+    ----------
+    reconstruction
+        Decoder output reconstructing the encoder input. Always present in
+        Stage 1 (a Stage 1 model with ``NoopDecoder`` would have nothing
+        to optimize).
+    mu
+        Latent mean from the sampling layer.
+    logvar
+        Latent log-variance from the sampling layer.
+    """
+
+    reconstruction: torch.Tensor
+    mu: torch.Tensor
+    logvar: torch.Tensor
+
+
+class VariationalAutoencoder(nn.Module):
+    """Stage 1 unsupervised pre-training model: encoder → sample → decoder.
+
+    The Stage 1 counterpart of :class:`VariationalComposite`. Identical
+    construction except there is **no classifier head** — the forward
+    output is an :class:`AutoencoderOutput` carrying ``reconstruction``,
+    ``mu``, ``logvar``, with no ``logits`` field.
+
+    Mirrors MATLAB's Stage 1 path in ``cgg_trainAllAutoEncoder_v2.m``
+    (line 232's ``cgg_trainNetwork`` call **without** a ``Classifier``
+    argument → ``HasClassifier=false`` → all classification math
+    skipped).
+
+    Parameters
+    ----------
+    encoder
+        Sequence encoder.
+    bottleneck
+        :class:`~neural_data_decoding.models.bottleneck.LinearBottleneck`
+        emitting ``2 * latent`` channels (mu | logvar).
+    sampling
+        :class:`~neural_data_decoding.models.layers.sampling.SamplingLayer`.
+    decoder
+        Reconstruction decoder consuming ``Z``.
+    nan_to_zero
+        Optional leading NaN→0 transform. Defaults to a fresh
+        :class:`~neural_data_decoding.models.layers.nan_to_zero.NaNToZero`.
+    """
+
+    def __init__(
+        self,
+        *,
+        encoder: nn.Module,
+        bottleneck: nn.Module,
+        sampling: SamplingLayer,
+        decoder: nn.Module,
+        nan_to_zero: Optional[NaNToZero] = None,
+    ) -> None:
+        super().__init__()
+        self.nan_to_zero = nan_to_zero if nan_to_zero is not None else NaNToZero()
+        self.encoder = encoder
+        self.bottleneck = bottleneck
+        self.sampling = sampling
+        self.decoder = decoder
+
+    def forward(self, x: torch.Tensor) -> AutoencoderOutput:
+        """Run the Stage 1 forward pass: encode → sample → decode."""
+        x0 = self.nan_to_zero(x)
+        encoded = self.encoder(x0)
+        stats = self.bottleneck(encoded)
+        z, mu, logvar = self.sampling(stats)
+        reconstruction = self.decoder(z)
+        return AutoencoderOutput(reconstruction=reconstruction, mu=mu, logvar=logvar)
+
+
+def build_variational_autoencoder(cfg: Mapping[str, Any]) -> VariationalAutoencoder:
+    """Assemble a Stage 1 :class:`VariationalAutoencoder` from a resolved config.
+
+    Same config schema as :func:`build_variational_composite` — the
+    ``classifier_*`` keys are simply not consumed because there is no
+    classifier head. This lets the CLI pass the same config dict to both
+    builders without conditional pre-processing.
+
+    A ``NoopDecoder`` is disallowed in Stage 1: there has to be a
+    real reconstruction objective for the unsupervised stage to do any
+    work. Any ``loss_type_decoder`` other than ``"None"`` is accepted.
+
+    Returns
+    -------
+    VariationalAutoencoder
+
+    Raises
+    ------
+    KeyError
+        If a required key is missing.
+    ValueError
+        If ``hidden_sizes`` has fewer than 2 entries, or
+        ``loss_type_decoder`` is ``"None"`` (no reconstruction).
+    """
+    encoder, bottleneck, sampling, decoder = _build_ae_core(cfg)
+    if isinstance(decoder, NoopDecoder):
+        raise ValueError(
+            "Stage 1 (autoencoder) requires a real decoder for the "
+            "reconstruction objective; cfg.loss_type_decoder='None' "
+            "produced a NoopDecoder. Either enable reconstruction or "
+            "skip Stage 1 by setting num_epochs_autoencoder=0."
+        )
+    return VariationalAutoencoder(
+        encoder=encoder, bottleneck=bottleneck, sampling=sampling, decoder=decoder,
+    )
+
+
+def copy_autoencoder_weights(
+    src: VariationalAutoencoder, dst: VariationalComposite,
+) -> None:
+    """Copy Stage 1 encoder/bottleneck/sampling/decoder weights into Stage 2.
+
+    Used at the Stage 1 → Stage 2 handoff: the Optimal autoencoder weights
+    bootstrap the corresponding submodules of the full composite, then
+    Stage 2 training fine-tunes them alongside the freshly-initialized
+    classifier head.
+
+    The two architectures must agree on the encoder / bottleneck / sampling
+    / decoder shapes (this is the caller's responsibility — both should
+    be built from the same cfg).
+
+    Raises
+    ------
+    RuntimeError
+        If any of the four submodules' state_dicts have mismatched keys
+        or shapes.
+    """
+    dst.encoder.load_state_dict(src.encoder.state_dict())
+    dst.bottleneck.load_state_dict(src.bottleneck.state_dict())
+    dst.sampling.load_state_dict(src.sampling.state_dict())
+    dst.decoder.load_state_dict(src.decoder.state_dict())
+    # nan_to_zero is stateless (no learnables) — nothing to copy.
+
+
+def _build_ae_core(
+    cfg: Mapping[str, Any],
+) -> tuple[SimpleSequenceEncoder, LinearBottleneck, SamplingLayer, nn.Module]:
+    """Shared construction for the autoencoder core (encoder + bottleneck + sampling + decoder).
+
+    Extracted so :func:`build_variational_composite` and
+    :func:`build_variational_autoencoder` stay DRY without inheriting from
+    each other.
+    """
+    try:
+        in_features = int(cfg["in_features"])
+        hidden_sizes = [int(h) for h in cfg["hidden_sizes"]]
+    except KeyError as exc:
+        raise KeyError(
+            f"_build_ae_core: missing required cfg key {exc}"
         ) from exc
 
     if len(hidden_sizes) < 2:
@@ -300,12 +480,10 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
         want_normalization=want_normalization,
         activation=activation,
     )
-    # Bottleneck emits 2*latent channels (mu | logvar concatenated).
     bottleneck = LinearBottleneck(
-        in_features=encoder.out_features, hidden_size=2 * latent
+        in_features=encoder.out_features, hidden_size=2 * latent,
     )
     sampling = SamplingLayer(channel_dim=-1)
-
     decoder = build_decoder(
         {
             "loss_type_decoder": str(cfg.get("loss_type_decoder", "None")),
@@ -318,27 +496,17 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
             "activation": activation,
         }
     )
-
-    classifier = DeepLSTMClassifier(
-        in_features=latent,
-        num_classes_per_dim=num_classes_per_dim,
-        hidden_sizes=classifier_hidden,
-        dropout=float(cfg.get("classifier_dropout", 0.5)),
-    )
-
-    return VariationalComposite(
-        encoder=encoder,
-        bottleneck=bottleneck,
-        sampling=sampling,
-        decoder=decoder,
-        classifier=classifier,
-    )
+    return encoder, bottleneck, sampling, decoder
 
 
 __all__ = [
+    "AutoencoderOutput",
     "EncoderClassifierComposite",
+    "VariationalAutoencoder",
     "VariationalComposite",
     "VariationalOutput",
+    "build_variational_autoencoder",
     "build_variational_composite",
+    "copy_autoencoder_weights",
 ]
 

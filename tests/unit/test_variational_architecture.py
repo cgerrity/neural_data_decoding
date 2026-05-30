@@ -247,3 +247,104 @@ def test_build_variational_composite_requires_two_hidden_sizes() -> None:
                 "classifier_hidden_size": [4],
             }
         )
+
+
+# ───────────────────────── VariationalAutoencoder (Stage 1) ─────────────────────────
+
+
+def _ae_cfg() -> dict:
+    return {
+        "in_features": 8,
+        "hidden_sizes": [16, 4],
+        "num_classes_per_dim": [3],
+        "classifier_hidden_size": [4],
+        "loss_type_decoder": "MSE",
+        "transform": "GRU",
+    }
+
+
+def test_variational_autoencoder_forward_returns_autoencoder_output() -> None:
+    """Stage 1 model's forward returns AutoencoderOutput (no logits field)."""
+    from neural_data_decoding.models.composite import (
+        AutoencoderOutput,
+        build_variational_autoencoder,
+    )
+    ae = build_variational_autoencoder(_ae_cfg())
+    out = ae(torch.zeros(2, 5, 8))
+    assert isinstance(out, AutoencoderOutput)
+    assert out.reconstruction.shape == (2, 5, 8)
+    assert out.mu.shape[-1] == 4
+    assert out.logvar.shape == out.mu.shape
+    assert not hasattr(out, "logits")
+
+
+def test_variational_autoencoder_has_no_classifier_submodule() -> None:
+    """Stage 1 model literally cannot produce logits."""
+    from neural_data_decoding.models.composite import build_variational_autoencoder
+    ae = build_variational_autoencoder(_ae_cfg())
+    assert not hasattr(ae, "classifier")
+    # Sanity check: it DOES have encoder/bottleneck/sampling/decoder.
+    for attr in ("encoder", "bottleneck", "sampling", "decoder"):
+        assert hasattr(ae, attr), f"Stage 1 AE missing expected submodule: {attr}"
+
+
+def test_variational_autoencoder_rejects_noop_decoder() -> None:
+    """Stage 1 with loss_type_decoder='None' is meaningless — raise."""
+    from neural_data_decoding.models.composite import build_variational_autoencoder
+    cfg = _ae_cfg()
+    cfg["loss_type_decoder"] = "None"
+    with pytest.raises(ValueError, match="Stage 1.*real decoder"):
+        build_variational_autoencoder(cfg)
+
+
+# ───────────────────────── copy_autoencoder_weights handoff ─────────────────────────
+
+
+def test_copy_autoencoder_weights_roundtrips_encoder_and_decoder() -> None:
+    """Stage 1 → Stage 2 weight handoff: encoder/bottleneck/decoder match exactly."""
+    from neural_data_decoding.models.composite import (
+        build_variational_autoencoder,
+        build_variational_composite,
+        copy_autoencoder_weights,
+    )
+    cfg = _ae_cfg()
+    ae = build_variational_autoencoder(cfg)
+    full = build_variational_composite(cfg)
+
+    # Perturb the full composite's autoencoder weights so we can verify the copy.
+    with torch.no_grad():
+        for p in full.encoder.parameters():
+            p.add_(0.5)
+        for p in full.decoder.parameters():
+            p.add_(0.5)
+
+    copy_autoencoder_weights(ae, full)
+
+    # After copy, encoder/bottleneck/decoder match Stage 1 exactly.
+    for src_p, dst_p in zip(ae.encoder.parameters(), full.encoder.parameters()):
+        assert torch.equal(src_p, dst_p)
+    for src_p, dst_p in zip(ae.bottleneck.parameters(), full.bottleneck.parameters()):
+        assert torch.equal(src_p, dst_p)
+    for src_p, dst_p in zip(ae.decoder.parameters(), full.decoder.parameters()):
+        assert torch.equal(src_p, dst_p)
+
+
+def test_copy_autoencoder_weights_leaves_classifier_alone() -> None:
+    """Stage 2's classifier should NOT be touched by the autoencoder weight copy."""
+    from neural_data_decoding.models.composite import (
+        build_variational_autoencoder,
+        build_variational_composite,
+        copy_autoencoder_weights,
+    )
+    cfg = _ae_cfg()
+    ae = build_variational_autoencoder(cfg)
+    full = build_variational_composite(cfg)
+
+    classifier_snapshot = {
+        name: p.detach().clone() for name, p in full.classifier.named_parameters()
+    }
+    copy_autoencoder_weights(ae, full)
+
+    for name, p in full.classifier.named_parameters():
+        assert torch.equal(p, classifier_snapshot[name]), \
+            f"Classifier parameter {name} was modified by autoencoder weight copy."

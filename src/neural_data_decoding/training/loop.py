@@ -42,7 +42,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from neural_data_decoding.models.composite import VariationalOutput
+from neural_data_decoding.models.composite import AutoencoderOutput, VariationalOutput
 from neural_data_decoding.training.losses.classification import (
     multi_head_cross_entropy,
 )
@@ -400,4 +400,167 @@ class _MetricSums:
         )
 
 
-__all__ = ["EpochMetrics", "train_one_epoch", "validate"]
+@dataclass(slots=True)
+class UnsupervisedEpochMetrics:
+    """Per-epoch aggregate metrics for Stage 1 (autoencoder-only).
+
+    Mirrors :class:`EpochMetrics` but with reconstruction + KL components
+    instead of classification + accuracy. No classification accuracy field
+    because Stage 1 has no classifier.
+
+    Attributes
+    ----------
+    total_loss
+        Mean (across iterations) of the weighted ``recon + KL`` sum.
+    reconstruction_loss
+        Mean reconstruction component.
+    kl_loss
+        Mean KL divergence component.
+    num_iterations, num_trials
+        Same as :class:`EpochMetrics`.
+    """
+
+    total_loss: float
+    reconstruction_loss: float
+    kl_loss: float
+    num_iterations: int
+    num_trials: int
+
+
+def train_unsupervised_epoch(
+    *,
+    model: nn.Module,
+    dataloader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    loss_weights: Mapping[str, float],
+    grad_clip_norm: Optional[float] = None,
+) -> UnsupervisedEpochMetrics:
+    """Run one Stage 1 unsupervised training epoch.
+
+    Model must produce :class:`AutoencoderOutput` (encoder + bottleneck +
+    sampling + decoder, no classifier). Computes the NaN-masked MSE
+    reconstruction loss and the KL divergence on the latent, then their
+    weighted sum.
+
+    Parameters
+    ----------
+    model
+        :class:`~neural_data_decoding.models.composite.VariationalAutoencoder`
+        (or any module whose ``forward`` returns an :class:`AutoencoderOutput`).
+    dataloader
+        Yields ``collate_trials`` dicts; ``targets`` is ignored.
+    optimizer
+        Already constructed.
+    device
+        Where to put tensors.
+    loss_weights
+        Per-component weight dict; expected keys ``"reconstruction"`` and
+        ``"kl"``. Missing keys default to 1.0; extra keys are ignored.
+    grad_clip_norm
+        Global L2 gradient-norm clip threshold. ``None`` disables.
+
+    Returns
+    -------
+    UnsupervisedEpochMetrics
+    """
+    model.train()
+    sum_total = 0.0
+    sum_recon = 0.0
+    sum_kl = 0.0
+    iterations = 0
+    trials = 0
+    w_recon = float(loss_weights.get("reconstruction", 1.0))
+    w_kl = float(loss_weights.get("kl", 1.0))
+
+    for batch in dataloader:
+        x = batch["x"].to(device, non_blocking=True)
+        batch_size = int(x.shape[0])
+
+        optimizer.zero_grad(set_to_none=True)
+        out = model(x)
+        if not isinstance(out, AutoencoderOutput):
+            raise TypeError(
+                f"train_unsupervised_epoch expected AutoencoderOutput; "
+                f"got {type(out).__name__}."
+            )
+        recon_loss = masked_mse_reconstruction_loss(out.reconstruction, x, batch_dim=0)
+        kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
+        total_loss = w_recon * recon_loss + w_kl * kl_loss
+        total_loss.backward()
+        if grad_clip_norm is not None:
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
+        optimizer.step()
+
+        sum_total += float(total_loss.item())
+        sum_recon += float(recon_loss.item())
+        sum_kl += float(kl_loss.item())
+        iterations += 1
+        trials += batch_size
+
+    iters = max(iterations, 1)
+    return UnsupervisedEpochMetrics(
+        total_loss=sum_total / iters,
+        reconstruction_loss=sum_recon / iters,
+        kl_loss=sum_kl / iters,
+        num_iterations=iterations,
+        num_trials=trials,
+    )
+
+
+@torch.no_grad()
+def validate_unsupervised(
+    *,
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device,
+    loss_weights: Mapping[str, float],
+) -> UnsupervisedEpochMetrics:
+    """Stage 1 validation pass — no gradients, no priors, no classification."""
+    model.eval()
+    sum_total = 0.0
+    sum_recon = 0.0
+    sum_kl = 0.0
+    iterations = 0
+    trials = 0
+    w_recon = float(loss_weights.get("reconstruction", 1.0))
+    w_kl = float(loss_weights.get("kl", 1.0))
+
+    for batch in dataloader:
+        x = batch["x"].to(device, non_blocking=True)
+        batch_size = int(x.shape[0])
+
+        out = model(x)
+        if not isinstance(out, AutoencoderOutput):
+            raise TypeError(
+                f"validate_unsupervised expected AutoencoderOutput; "
+                f"got {type(out).__name__}."
+            )
+        recon_loss = masked_mse_reconstruction_loss(out.reconstruction, x, batch_dim=0)
+        kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
+        total_loss = w_recon * recon_loss + w_kl * kl_loss
+
+        sum_total += float(total_loss.item())
+        sum_recon += float(recon_loss.item())
+        sum_kl += float(kl_loss.item())
+        iterations += 1
+        trials += batch_size
+
+    iters = max(iterations, 1)
+    return UnsupervisedEpochMetrics(
+        total_loss=sum_total / iters,
+        reconstruction_loss=sum_recon / iters,
+        kl_loss=sum_kl / iters,
+        num_iterations=iterations,
+        num_trials=trials,
+    )
+
+
+__all__ = [
+    "EpochMetrics",
+    "UnsupervisedEpochMetrics",
+    "train_one_epoch",
+    "train_unsupervised_epoch",
+    "validate",
+    "validate_unsupervised",
+]

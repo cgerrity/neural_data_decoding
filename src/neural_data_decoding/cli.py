@@ -41,15 +41,20 @@ from .interop import (
 import neural_data_decoding.models  # noqa: F401 — triggers architecture registrations
 from .models.bottleneck import LinearBottleneck, PassthroughBottleneck
 from .models.classifier import MultiHeadClassifier
-from .models.composite import EncoderClassifierComposite, build_variational_composite
+from .models.composite import (
+    EncoderClassifierComposite,
+    build_variational_autoencoder,
+    build_variational_composite,
+)
 from .models.registry import build_classifier, build_encoder
 from .training.checkpoint import has_existing_checkpoint
 from .training.freezing import build_optimizer_with_module_groups
-from .training.lifecycle import EpochHistory, fit_supervised
+from .training.lifecycle import EpochHistory, fit_supervised, fit_two_stage
 from .training.losses.multi_objective import LossPriors
 from .training.losses.classification import inverse_frequency_class_weights
 from .training.schedules import (
     CurriculumBundle,
+    KLBaseAnneal,
     load_curriculum_by_name,
 )
 
@@ -266,30 +271,139 @@ def _cmd_train(args: argparse.Namespace) -> int:
         else _print_epoch
     )
 
-    history = fit_supervised(
-        model=model,
+    # Two-stage dispatch: Stage 1 unsupervised pre-training + Stage 2
+    # supervised fine-tuning when the variational config asks for it.
+    num_epochs_ae = int(cfg.num_epochs_autoencoder)
+    is_variational = bool(cfg.get("is_variational", False))
+    if num_epochs_ae > 0 and is_variational:
+        history = _dispatch_two_stage(
+            cfg=cfg, composite=model, composite_optimizer=optimizer,
+            train_loader=train_loader, val_loader=val_loader,
+            result_dir=result_dir, num_features=num_features,
+            num_classes_per_dim=num_classes_per_dim,
+            loss_weights_dict=loss_weights_dict, class_weights=class_weights,
+            initial_priors=initial_priors, epoch_cb=epoch_cb,
+            on_optimal=_on_optimal, curriculum=curriculum,
+        )
+    else:
+        history = fit_supervised(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            optimizer=optimizer,
+            num_epochs=int(cfg.num_epochs_full),
+            device=torch.device("cpu"),
+            loss_weights=loss_weights_dict,
+            checkpoint_dir=result_dir,
+            class_weights_per_dim=class_weights,
+            grad_clip_norm=float(cfg.gradient_threshold),
+            epoch_callback=epoch_cb,
+            on_optimal_callback=_on_optimal,
+            loss_priors=initial_priors,
+            prior_proportion=float(cfg.get("prior_proportion", 0.9)),
+            curriculum=curriculum,
+            freeze_base_lr=float(cfg.initial_learning_rate),
+            rescale_loss_epoch=int(cfg.get("rescale_loss_epoch", 0)),
+        )
+
+    final_val_acc = history[-1].val.accuracy if history and history[-1].val else None
+    print(f"\nDone. Final validation accuracy: {final_val_acc}")
+    print(f"Results written to: {result_dir}")
+    return 0
+
+
+def _dispatch_two_stage(
+    *,
+    cfg: DictConfig,
+    composite: torch.nn.Module,
+    composite_optimizer: torch.optim.Optimizer,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    result_dir: Path,
+    num_features: int,
+    num_classes_per_dim: list[int],
+    loss_weights_dict: dict[str, float],
+    class_weights: Optional[list[torch.Tensor]],
+    initial_priors: Optional[LossPriors],
+    epoch_cb: Any,
+    on_optimal: Any,
+    curriculum: Optional[CurriculumBundle],
+) -> list[EpochHistory]:
+    """Build Stage 1 autoencoder + optimizer and dispatch to fit_two_stage.
+
+    The Stage 2 composite + its optimizer come pre-built from the caller
+    (the same construction the single-stage path uses); we only need to
+    add the Stage 1 autoencoder and a separate optimizer for it.
+    """
+    from .models.composite import VariationalComposite
+    assert isinstance(composite, VariationalComposite), \
+        "Two-stage dispatch requires a VariationalComposite as the Stage 2 model."
+
+    ae_cfg = {
+        "in_features": num_features,
+        "hidden_sizes": list(cfg.hidden_sizes),
+        "num_classes_per_dim": num_classes_per_dim,        # unused by AE builder
+        "classifier_hidden_size": list(cfg.classifier_hidden_size),  # unused
+        "transform": str(cfg.model_name),
+        "dropout": float(cfg.dropout),
+        "want_normalization": bool(cfg.want_normalization),
+        "activation": str(cfg.activation),
+        "loss_type_decoder": str(cfg.get("loss_type_decoder", "MSE")),
+    }
+    autoencoder = build_variational_autoencoder(ae_cfg)
+    stage1_optimizer = torch.optim.AdamW(
+        autoencoder.parameters(),
+        lr=float(cfg.initial_learning_rate),
+        weight_decay=float(cfg.l2_factor),
+    )
+
+    print(
+        f"+++ Two-stage training: Stage 1 ({int(cfg.num_epochs_autoencoder)} "
+        f"unsupervised epochs) → handoff → Stage 2 "
+        f"({int(cfg.num_epochs_full)} supervised epochs)"
+    )
+    _, stage2_history = fit_two_stage(
+        autoencoder=autoencoder,
+        composite=composite,
+        stage1_optimizer=stage1_optimizer,
+        stage2_optimizer=composite_optimizer,
+        stage1_num_epochs=int(cfg.num_epochs_autoencoder),
+        stage2_num_epochs=int(cfg.num_epochs_full),
         train_loader=train_loader,
         val_loader=val_loader,
-        optimizer=optimizer,
-        num_epochs=int(cfg.num_epochs_full),
         device=torch.device("cpu"),
         loss_weights=loss_weights_dict,
         checkpoint_dir=result_dir,
         class_weights_per_dim=class_weights,
         grad_clip_norm=float(cfg.gradient_threshold),
-        epoch_callback=epoch_cb,
-        on_optimal_callback=_on_optimal,
+        stage1_epoch_callback=_print_unsupervised_epoch,
+        stage2_epoch_callback=epoch_cb,
+        on_optimal_callback=on_optimal,
         loss_priors=initial_priors,
         prior_proportion=float(cfg.get("prior_proportion", 0.9)),
         curriculum=curriculum,
         freeze_base_lr=float(cfg.initial_learning_rate),
         rescale_loss_epoch=int(cfg.get("rescale_loss_epoch", 0)),
     )
+    return stage2_history
 
-    final_val_acc = history[-1].val.accuracy if history and history[-1].val else None
-    print(f"\nDone. Final validation accuracy: {final_val_acc}")
-    print(f"Results written to: {result_dir}")
-    return 0
+
+def _print_unsupervised_epoch(entry: Any) -> None:
+    """Stage 1 epoch printer — recon + KL, no accuracy."""
+    val_str = (
+        f" val_total={entry.val.total_loss:.4f}"
+        f" val_recon={entry.val.reconstruction_loss:.4f}"
+        f" val_kl={entry.val.kl_loss:.4f}"
+        if entry.val is not None
+        else ""
+    )
+    marker = "  *" if entry.is_best else ""
+    print(
+        f"[Stage 1] Epoch {entry.epoch:03d}  "
+        f"train_total={entry.train.total_loss:.4f}  "
+        f"train_recon={entry.train.reconstruction_loss:.4f}  "
+        f"train_kl={entry.train.kl_loss:.4f}{val_str}{marker}"
+    )
 
 
 def _cmd_check_existing(args: argparse.Namespace) -> int:
@@ -531,12 +645,27 @@ def _build_curriculum(cfg: DictConfig) -> Optional[CurriculumBundle]:
     }
     base_freezes = {"encoder": 1.0, "decoder": 1.0, "classifier": 1.0}
 
-    return load_curriculum_by_name(
+    # Legacy KL base anneal (cgg_annealWeight wrapped around the KL weight,
+    # applied BEFORE the dynamic schedule's multiply). Active iff the
+    # config provides a positive ramp length; otherwise the KL weight goes
+    # straight to its base value with no warmup.
+    kl_anneal: Optional[KLBaseAnneal] = None
+    kl_ramp = int(cfg.get("weight_epoch_ramp", 0))
+    if kl_ramp > 0:
+        kl_anneal = KLBaseAnneal(
+            initial_weight=float(cfg.get("weight_kl", 0.0)),
+            delay_epoch=int(cfg.get("weight_delay_epoch", 0)),
+            epoch_ramp=kl_ramp,
+        )
+
+    bundle = load_curriculum_by_name(
         regime,
         base_loads=base_loads,
         base_weights=base_weights,
         base_freezes=base_freezes,
     )
+    bundle.kl_anneal = kl_anneal
+    return bundle
 
 
 def _build_optimizer(
