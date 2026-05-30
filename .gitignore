@@ -15,12 +15,14 @@ venv/
 env/
 .python-version
 
-# Editor / OS
+# Editor / OS / AI tooling
 .vscode/
 .idea/
 *.swp
 .DS_Store
 Thumbs.db
+# Claude Code per-project local settings + caches
+.claude/
 
 # Testing
 .pytest_cache/

@@ -131,6 +131,7 @@ def test_variational_forward_returns_all_four_outputs() -> None:
     assert len(out.logits) == 2
     assert out.logits[0].shape == (2, 5, 3)
     assert out.logits[1].shape == (2, 5, 2)
+    assert out.reconstruction is not None
     assert out.reconstruction.shape == (2, 5, 6)  # reconstructs input features
     assert out.mu.shape == (2, 5, 4)              # latent
     assert out.logvar.shape == (2, 5, 4)

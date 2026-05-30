@@ -22,7 +22,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -32,6 +32,7 @@ from . import __version__
 from .data.dataset import SyntheticTrialDataset, collate_trials
 from .interop import (
     ENCODING_PARAMETERS_FILENAME,
+    TEST_CM_TABLE_FILENAME,
     VALIDATION_CM_TABLE_FILENAME,
     build_result_dir,
     write_cm_table_mat,
@@ -40,10 +41,11 @@ from .interop import (
 import neural_data_decoding.models  # noqa: F401 — triggers architecture registrations
 from .models.bottleneck import LinearBottleneck, PassthroughBottleneck
 from .models.classifier import MultiHeadClassifier
-from .models.composite import EncoderClassifierComposite
+from .models.composite import EncoderClassifierComposite, build_variational_composite
 from .models.registry import build_classifier, build_encoder
-from .training.checkpoint import has_existing_checkpoint
+from .training.checkpoint import has_existing_checkpoint, load_optimal_checkpoint
 from .training.lifecycle import fit_supervised
+from .training.losses.multi_objective import LossPriors
 from .training.losses.classification import inverse_frequency_class_weights
 
 
@@ -166,8 +168,8 @@ def _cmd_train(args: argparse.Namespace) -> int:
         schema_template=schema,
     )
 
-    # Build the synthetic dataset, model, optimizer, then fit.
-    train_ds, val_ds = _build_synthetic_split(cfg)
+    # Build the synthetic datasets (train/val/test), model, optimizer, then fit.
+    train_ds, val_ds, test_ds = _build_synthetic_split(cfg)
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg.mini_batch_size),
@@ -176,6 +178,12 @@ def _cmd_train(args: argparse.Namespace) -> int:
     )
     val_loader = DataLoader(
         val_ds,
+        batch_size=int(cfg.mini_batch_size),
+        shuffle=False,
+        collate_fn=collate_trials,
+    )
+    test_loader = DataLoader(
+        test_ds,
         batch_size=int(cfg.mini_batch_size),
         shuffle=False,
         collate_fn=collate_trials,
@@ -205,6 +213,21 @@ def _cmd_train(args: argparse.Namespace) -> int:
         else None
     )
 
+    # For variational configs, expose all per-component weights AND enable
+    # EMA prior normalization. For Logistic/non-variational, only classification
+    # is active, so the simpler weight dict suffices.
+    is_variational = bool(cfg.get("is_variational", False))
+    if is_variational:
+        loss_weights_dict: dict[str, float] = {
+            "classification": float(cfg.weight_classification),
+            "reconstruction": float(cfg.get("weight_reconstruction", 1.0)),
+            "kl": float(cfg.get("weight_kl", 1.0)),
+        }
+        initial_priors: Optional[LossPriors] = LossPriors.initial()
+    else:
+        loss_weights_dict = {"classification": float(cfg.weight_classification)}
+        initial_priors = None
+
     history = fit_supervised(
         model=model,
         train_loader=train_loader,
@@ -212,15 +235,40 @@ def _cmd_train(args: argparse.Namespace) -> int:
         optimizer=optimizer,
         num_epochs=int(cfg.num_epochs_full),
         device=torch.device("cpu"),
-        loss_weights={"classification": float(cfg.weight_classification)},
+        loss_weights=loss_weights_dict,
         checkpoint_dir=result_dir,
         class_weights_per_dim=class_weights,
         grad_clip_norm=float(cfg.gradient_threshold),
         epoch_callback=_print_epoch,
+        loss_priors=initial_priors,
+        prior_proportion=float(cfg.get("prior_proportion", 0.9)),
     )
 
-    # Write a minimal validation CM_Table on the held-out split.
-    _write_validation_cm_table(model, val_ds, val_loader, result_dir)
+    # Write the validation CM_Table from the in-memory (end-of-training)
+    # model state. This is consumed during training by cgg_saveValidationCMTable
+    # downstream for model selection / sanity checks.
+    _write_cm_table_for_split(
+        model, val_loader, result_dir / VALIDATION_CM_TABLE_FILENAME
+    )
+
+    # Restore the Optimal (best-validation) weights and run on the held-out
+    # test split. This produces the CM_Table.mat that downstream MATLAB
+    # analysis (DATA_cggAllNetworkEncoderResults.m etc.) aggregates for the
+    # final reported results.
+    optimal_info = load_optimal_checkpoint(result_dir, model=model)
+    if optimal_info is not None:
+        print(
+            f"Restored Optimal weights (epoch {optimal_info['epoch']}, "
+            f"val metric {optimal_info['metric']:.4f}) for test pass."
+        )
+    else:
+        print(
+            "No Optimal snapshot was written (val_loader=None or no "
+            "improvement seen); writing test CM_Table from the final model state."
+        )
+    _write_cm_table_for_split(
+        model, test_loader, result_dir / TEST_CM_TABLE_FILENAME
+    )
 
     final_val_acc = history[-1].val.accuracy if history and history[-1].val else None
     print(f"\nDone. Final validation accuracy: {final_val_acc}")
@@ -267,12 +315,15 @@ def _build_model(
 ) -> torch.nn.Module:
     """Build the trainable model for the active milestone.
 
-    Three branches:
+    Four branches:
 
     * ``model_name='Logistic Regression'`` — direct
       :class:`MultiHeadClassifier`, no encoder. Milestone A.
+    * ``is_variational=True`` — Stochastic VAE composite (encoder →
+      bottleneck(2*latent) → sampling → {decoder, classifier}). Returns
+      a :class:`VariationalOutput` from ``forward``. Milestone C.
     * Any other ``model_name`` registered as an encoder — build
-      ``Encoder + Bottleneck + Classifier`` composite. Milestone B+.
+      ``Encoder + Bottleneck + Classifier`` composite. Milestone B.
 
     Parameters
     ----------
@@ -286,8 +337,9 @@ def _build_model(
     Returns
     -------
     torch.nn.Module
-        The composed model — its ``forward(x)`` returns a list of per-dim
-        logit tensors regardless of which branch was taken.
+        The composed model. For non-variational paths, ``forward(x)``
+        returns a list of per-dim logits. For variational, it returns a
+        :class:`~neural_data_decoding.models.composite.VariationalOutput`.
     """
     model_name = str(cfg.model_name)
 
@@ -297,6 +349,22 @@ def _build_model(
             in_features=in_features,
             num_classes_per_dim=num_classes_per_dim,
         )
+
+    # Milestone C — Stochastic VAE composite.
+    if bool(cfg.get("is_variational", False)):
+        variational_cfg = {
+            "in_features": in_features,
+            "hidden_sizes": list(cfg.hidden_sizes),
+            "num_classes_per_dim": num_classes_per_dim,
+            "classifier_hidden_size": list(cfg.classifier_hidden_size),
+            "transform": model_name,                     # 'GRU', 'LSTM', or 'Feedforward'
+            "dropout": float(cfg.dropout),
+            "want_normalization": bool(cfg.want_normalization),
+            "activation": str(cfg.activation),
+            "loss_type_decoder": str(cfg.get("loss_type_decoder", "MSE")),
+            "classifier_dropout": float(cfg.get("classifier_dropout", 0.5)),
+        }
+        return build_variational_composite(variational_cfg)
 
     # Milestone B+ — composite Encoder + Bottleneck + Classifier.
     encoder_cfg = {
@@ -354,8 +422,23 @@ def _resolve_result_dir(cfg: DictConfig, output_root: Path) -> Path:
 
 def _build_synthetic_split(
     cfg: DictConfig,
-) -> tuple[SyntheticTrialDataset, SyntheticTrialDataset]:
-    """Build a train/val pair of :class:`SyntheticTrialDataset` for the tracer bullet."""
+) -> tuple[SyntheticTrialDataset, SyntheticTrialDataset, SyntheticTrialDataset]:
+    """Build a (train, val, test) triple of :class:`SyntheticTrialDataset`.
+
+    Three disjoint splits, each with its own seed (so the validation and
+    test sets are independent of training AND each other). Matches the
+    MATLAB pipeline's distinction:
+
+    * **val** drives the Optimal-snapshot model selection during training
+      (each epoch's CM_Table_Validation.mat is written from here).
+    * **test** is run once at the end against the loaded Optimal weights;
+      the resulting CM_Table.mat is what downstream analysis aggregates
+      for final reported results.
+
+    The synthetic dataset's trial-count knob is per-session, so we scale
+    it by the respective fraction; both val and test fall back to a
+    sensible minimum of 1 trial/session.
+    """
     fold_seed = int(cfg.fold) * 17  # deterministic, but distinct across folds
     train_ds = SyntheticTrialDataset(
         num_sessions=int(cfg.synthetic_num_sessions),
@@ -366,22 +449,34 @@ def _build_synthetic_split(
         signal_strength=float(cfg.synthetic_signal_strength),
         seed=fold_seed,
     )
+    val_trials = max(
+        1,
+        int(int(cfg.synthetic_trials_per_session)
+            * float(cfg.synthetic_validation_fraction)),
+    )
     val_ds = SyntheticTrialDataset(
         num_sessions=int(cfg.synthetic_num_sessions),
-        trials_per_session=max(
-            1,
-            int(
-                int(cfg.synthetic_trials_per_session)
-                * float(cfg.synthetic_validation_fraction)
-            ),
-        ),
+        trials_per_session=val_trials,
         num_samples=int(cfg.synthetic_num_samples),
         num_features=int(cfg.synthetic_num_features),
         num_classes_per_dim=list(cfg.synthetic_num_classes_per_dim),
         signal_strength=float(cfg.synthetic_signal_strength),
         seed=fold_seed + 1,
     )
-    return train_ds, val_ds
+    test_fraction = float(cfg.get("synthetic_test_fraction", 0.2))
+    test_trials = max(
+        1, int(int(cfg.synthetic_trials_per_session) * test_fraction)
+    )
+    test_ds = SyntheticTrialDataset(
+        num_sessions=int(cfg.synthetic_num_sessions),
+        trials_per_session=test_trials,
+        num_samples=int(cfg.synthetic_num_samples),
+        num_features=int(cfg.synthetic_num_features),
+        num_classes_per_dim=list(cfg.synthetic_num_classes_per_dim),
+        signal_strength=float(cfg.synthetic_signal_strength),
+        seed=fold_seed + 2,
+    )
+    return train_ds, val_ds, test_ds
 
 
 def _print_epoch(history_entry: Any) -> None:
@@ -400,24 +495,35 @@ def _print_epoch(history_entry: Any) -> None:
     )
 
 
-def _write_validation_cm_table(
+def _write_cm_table_for_split(
     model: torch.nn.Module,
-    val_ds: SyntheticTrialDataset,
-    val_loader: DataLoader,
-    result_dir: Path,
+    loader: DataLoader,
+    output_path: Path,
 ) -> None:
-    """Run the trained model on the val split and persist the CM_Table."""
+    """Run ``model`` over ``loader`` and persist a CM_Table at ``output_path``.
+
+    Used both for the validation CM_Table (model state at end of training)
+    and the test CM_Table (model state restored from the Optimal snapshot).
+    Selects between :class:`VariationalOutput` and a plain list[Tensor] of
+    logits transparently so the same writer works for Milestones A, B,
+    and C.
+    """
     import numpy as np
+
+    from .models.composite import VariationalOutput
 
     model.eval()
     all_predictions: list[list[int]] = []
     all_targets: list[list[int]] = []
     all_trial_ids: list[int] = []
     with torch.no_grad():
-        for batch in val_loader:
-            logits_per_dim = model(batch["x"])
+        for batch in loader:
+            out = model(batch["x"])
+            # Variational composite returns VariationalOutput; classifier-only
+            # composites return a list[Tensor] of per-dim logits directly.
+            logits_per_dim = out.logits if isinstance(out, VariationalOutput) else out
             per_trial_pred: list[list[int]] = []
-            for d, logits in enumerate(logits_per_dim):
+            for _d, logits in enumerate(logits_per_dim):
                 if logits.ndim == 3:
                     logits = logits[:, -1, :]
                 pred = logits.argmax(dim=-1).tolist()
@@ -434,7 +540,7 @@ def _write_validation_cm_table(
     true_values = np.array(all_targets, dtype=np.float64)
     window = np.array(all_predictions, dtype=np.float64)
     write_cm_table_mat(
-        result_dir / VALIDATION_CM_TABLE_FILENAME,
+        output_path,
         data_numbers=data_numbers,
         true_values=true_values,
         window_predictions=[window],

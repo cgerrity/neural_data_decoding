@@ -113,7 +113,7 @@ def test_train_one_epoch_reduces_loss() -> None:
         device=torch.device("cpu"),
         loss_weights={"classification": 1.0},
     )
-    trained = train_one_epoch(
+    trained, _ = train_one_epoch(
         model=model,
         dataloader=loader,
         optimizer=optimizer,

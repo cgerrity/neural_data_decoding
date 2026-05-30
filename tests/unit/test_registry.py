@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 import pytest
 import torch.nn as nn
 
@@ -20,7 +23,7 @@ def test_register_and_build_encoder_round_trip(empty_namespace: str) -> None:
     """Registering an encoder makes it discoverable via build_encoder()."""
 
     @registry.register_encoder(empty_namespace)
-    def _factory(_cfg: dict) -> nn.Module:
+    def _factory(_cfg: Mapping[str, Any]) -> nn.Module:
         return nn.Linear(4, 2)
 
     module = registry.build_encoder(empty_namespace, {})
@@ -32,7 +35,7 @@ def test_register_and_build_classifier_round_trip(empty_namespace: str) -> None:
     """Same round-trip but for the classifier registry."""
 
     @registry.register_classifier(empty_namespace)
-    def _factory(_cfg: dict) -> nn.Module:
+    def _factory(_cfg: Mapping[str, Any]) -> nn.Module:
         return nn.Identity()
 
     module = registry.build_classifier(empty_namespace, {})
@@ -44,13 +47,13 @@ def test_duplicate_registration_raises(empty_namespace: str) -> None:
     """Registering the same name twice is an error (avoids silent shadowing)."""
 
     @registry.register_encoder(empty_namespace)
-    def _first(_cfg: dict) -> nn.Module:
+    def _first(_cfg: Mapping[str, Any]) -> nn.Module:
         return nn.Identity()
 
     with pytest.raises(ValueError, match="already registered"):
 
         @registry.register_encoder(empty_namespace)
-        def _second(_cfg: dict) -> nn.Module:
+        def _second(_cfg: Mapping[str, Any]) -> nn.Module:
             return nn.Identity()
 
 
@@ -71,7 +74,7 @@ def test_cfg_is_passed_through_to_builder(empty_namespace: str) -> None:
     received: dict[str, object] = {}
 
     @registry.register_classifier(empty_namespace)
-    def _factory(cfg: dict) -> nn.Module:
+    def _factory(cfg: Mapping[str, Any]) -> nn.Module:
         received.update(cfg)
         return nn.Identity()
 

@@ -15,7 +15,7 @@ subpackage knows about MATLAB-side requirements.
 """
 
 from neural_data_decoding.interop.cm_table_format import (
-    TRAINING_CM_TABLE_FILENAME,
+    TEST_CM_TABLE_FILENAME,
     VALIDATION_CM_TABLE_FILENAME,
     write_cm_table_mat,
 )
@@ -47,7 +47,7 @@ from neural_data_decoding.interop.weight_converter import (
 __all__ = [
     "ENCODING_PARAMETERS_FILENAME",
     "MatlabNotFoundError",
-    "TRAINING_CM_TABLE_FILENAME",
+    "TEST_CM_TABLE_FILENAME",
     "VALIDATION_CM_TABLE_FILENAME",
     "build_result_dir",
     "describe_table_mat",

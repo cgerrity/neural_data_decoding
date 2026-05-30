@@ -22,21 +22,32 @@ the MATLAB sources are referenced for parity testing only.
   `Processing_Functions_cgg/`. The fallbacks try the parent of the project
   root (legacy layout) and a known absolute path; if neither works the
   fixture scripts error clearly.
-- **Tests:** `python -m pytest` runs the default 296 tests in ~3s. MATLAB-gated
+- **Tests:** `python -m pytest` runs the default 328 tests in ~3s. MATLAB-gated
   parity (`-m needs_matlab`) needs a MATLAB executable + the source root
   resolvable.
+- **Static checking:** `pyright` runs project-wide with zero errors. The
+  config (`pyproject.toml [tool.pyright]`) silences `reportPrivateImportUsage`
+  for torch (lazy-load false positives).
 - **Output locations:** smoke-test runs write to `<repo>/results/`
   (gitignored). Don't default to `/tmp/...` without telling the user.
 
 ## Status & next step
 
-- Milestones 0 / A / B complete; Milestone C in progress.
-- Single-step T2 forward parity against MATLAB verified to ~1e-9 for the
-  full Encoder + Bottleneck + Deep LSTM Classifier composite.
-- Milestone C VAE-core (sampling, NaN mask, ELBO, MIL softmax,
-  variational composite) is in. **Next step is Milestone C #3 —
-  confidence routing**, the highest-risk port (Critical Note #29's five
-  subtleties). See `HANDOFF.md` "Next up".
+- Milestones 0 / A / B complete; Milestone C **core** complete (VAE
+  sampling, NaN mask, ELBO, MIL softmax, variational composite,
+  confidence PD-controller, EMA prior normalization, variational
+  training integration) and end-to-end smoke-runnable.
+- Single-step T2 forward parity against MATLAB: ~1e-9 (composite
+  forward), ~1e-10 (confidence kernel), 1e-6 (ELBO + MIL + sampling).
+- All three target_milestone configs (A / B / C) run end-to-end on
+  synthetic data and write both `CM_Table_Validation.mat` (during
+  training) and `CM_Table.mat` (from the Optimal weights on the
+  held-out test set).
+- **Next step is Milestone C #5 — dynamic curriculum schedules**
+  (`LoadParameters`, `WeightParameters`, `FreezeParameters` —
+  Critical Notes #7, #8). After #5: Milestone C #6 (full two-stage
+  lifecycle with `NumEpochsAutoEncoder > 0`, KL annealing, hardware-
+  aware accumulation). See `HANDOFF.md` "Next up".
 
 ## Conventions to follow
 

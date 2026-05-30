@@ -43,15 +43,18 @@ def test_build_result_dir_layout(tmp_path: Path) -> None:
 
 def test_build_result_dir_is_deterministic(tmp_path: Path) -> None:
     """Same config + same fold → byte-identical path."""
-    kwargs = dict(
-        base_dir=tmp_path,
-        epoch="Decision",
-        target="Dimension",
-        model_name="GRU",
-        fold=2,
-        identifying_config={"batch_size": 32, "lr": 0.001},
-    )
-    assert build_result_dir(**kwargs) == build_result_dir(**kwargs)
+
+    def _call() -> Path:
+        return build_result_dir(
+            base_dir=tmp_path,
+            epoch="Decision",
+            target="Dimension",
+            model_name="GRU",
+            fold=2,
+            identifying_config={"batch_size": 32, "lr": 0.001},
+        )
+
+    assert _call() == _call()
 
 
 def test_build_result_dir_hash_changes_on_config_change(tmp_path: Path) -> None:

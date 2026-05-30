@@ -74,7 +74,7 @@ from scipy.io import savemat
 
 
 _VALIDATION_FILENAME = "CM_Table_Validation.mat"
-_TRAINING_FILENAME = "CM_Table.mat"
+_TEST_FILENAME = "CM_Table.mat"
 
 
 def write_cm_table_mat(
@@ -96,7 +96,7 @@ def write_cm_table_mat(
         consumer expects the filename ``CM_Table.mat`` (training) or
         ``CM_Table_Validation.mat`` (validation); see the
         :data:`VALIDATION_CM_TABLE_FILENAME` and
-        :data:`TRAINING_CM_TABLE_FILENAME` constants.
+        :data:`TEST_CM_TABLE_FILENAME` constants.
     data_numbers
         Per-trial integer identifiers, shape ``(N,)``. Stored as ``single``
         per MATLAB's schema; integer inputs are cast to ``float32`` on write.
@@ -205,11 +205,20 @@ def write_cm_table_mat(
 
 
 VALIDATION_CM_TABLE_FILENAME = _VALIDATION_FILENAME
-TRAINING_CM_TABLE_FILENAME = _TRAINING_FILENAME
+"""Filename for the **validation-set** CM_Table, written each epoch during
+training. Consumed by ``cgg_saveValidationCMTable.m`` and used for model
+selection (the Optimal snapshot tracks the best validation metric)."""
+
+TEST_CM_TABLE_FILENAME = _TEST_FILENAME
+"""Filename for the **test-set** CM_Table, written once at the end of
+training (after restoring the Optimal weights). Consumed by downstream
+analysis scripts (``DATA_cggAllNetworkEncoderResults.m`` etc.) for the
+final reported results — this is what the MATLAB pipeline writes as
+``CM_Table.mat`` (no ``_Validation`` suffix)."""
 
 
 __all__ = [
-    "TRAINING_CM_TABLE_FILENAME",
+    "TEST_CM_TABLE_FILENAME",
     "VALIDATION_CM_TABLE_FILENAME",
     "write_cm_table_mat",
 ]

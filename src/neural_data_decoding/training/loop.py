@@ -21,7 +21,7 @@ Examples
 The kernel is straightforward to invoke once the model and dataloader are
 ready::
 
-    metrics = train_one_epoch(
+    metrics, priors = train_one_epoch(
         model=classifier,
         dataloader=train_loader,
         optimizer=optimizer,
@@ -42,10 +42,19 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from neural_data_decoding.models.composite import VariationalOutput
 from neural_data_decoding.training.losses.classification import (
     multi_head_cross_entropy,
 )
-from neural_data_decoding.training.losses.multi_objective import aggregate_total_loss
+from neural_data_decoding.training.losses.elbo import (
+    kl_divergence_loss,
+    masked_mse_reconstruction_loss,
+)
+from neural_data_decoding.training.losses.multi_objective import (
+    LossPriors,
+    aggregate_normalized_losses,
+    aggregate_total_loss,
+)
 
 
 @dataclass(slots=True)
@@ -83,7 +92,10 @@ def train_one_epoch(
     loss_weights: Mapping[str, float],
     class_weights_per_dim: Optional[list[torch.Tensor]] = None,
     grad_clip_norm: Optional[float] = None,
-) -> EpochMetrics:
+    loss_priors: Optional[LossPriors] = None,
+    prior_proportion: float = 0.9,
+    update_priors: bool = True,
+) -> tuple[EpochMetrics, Optional[LossPriors]]:
     """Run one supervised training epoch — Milestone A classifier path.
 
     Parameters
@@ -115,11 +127,25 @@ def train_one_epoch(
     grad_clip_norm
         Global L2 gradient-norm clip threshold (Critical Note: matches
         MATLAB's ``GradientClipType='Global'``). ``None`` disables clipping.
+    loss_priors
+        Optional :class:`LossPriors` carrying EMA prior state across
+        iterations (Milestone C+). When provided, the orchestrator uses
+        :func:`aggregate_normalized_losses` (cross-component normalization
+        via classification's prior). When ``None``, falls back to the
+        simple weighted sum used by Milestones A/B.
+    prior_proportion
+        EMA smoothing factor passed through when ``loss_priors`` is provided.
+    update_priors
+        Whether each iteration EMA-updates the priors. Driven by
+        ``RescaleLossEpoch`` cadence at the lifecycle layer.
 
     Returns
     -------
     EpochMetrics
         Aggregated training metrics over this epoch.
+    LossPriors or None
+        The priors state after the epoch (or ``None`` if no priors were
+        provided). Caller persists this for the next epoch.
     """
     model.train()
     sums = _MetricSums()
@@ -130,13 +156,53 @@ def train_one_epoch(
         batch_size = int(x.shape[0])
 
         optimizer.zero_grad(set_to_none=True)
-        logits = model(x)
-        cls_loss = multi_head_cross_entropy(
-            logits, targets, class_weights_per_dim=class_weights_per_dim
-        )
-        total_loss, _ = aggregate_total_loss(
-            classification_loss=cls_loss, weights=loss_weights
-        )
+        out = model(x)
+
+        # Detect variational composite vs classifier-only output.
+        if isinstance(out, VariationalOutput):
+            logits = out.logits
+            cls_loss = multi_head_cross_entropy(
+                logits, targets, class_weights_per_dim=class_weights_per_dim
+            )
+            recon_loss: Optional[torch.Tensor] = None
+            kl_loss: Optional[torch.Tensor] = None
+            if out.reconstruction is not None:
+                recon_loss = masked_mse_reconstruction_loss(
+                    out.reconstruction, x, batch_dim=0
+                )
+            kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
+
+            if loss_priors is not None:
+                breakdown = aggregate_normalized_losses(
+                    reconstruction_loss=recon_loss,
+                    kl_loss=kl_loss,
+                    classification_loss=cls_loss,
+                    weights=loss_weights,
+                    priors=loss_priors,
+                    prior_proportion=prior_proportion,
+                    update_priors=update_priors,
+                )
+                total_loss = breakdown.total
+                loss_priors = breakdown.updated_priors
+            else:
+                # No EMA priors → simple weighted sum (Milestone C without
+                # the full orchestrator wired in yet).
+                total_loss, _ = aggregate_total_loss(
+                    classification_loss=cls_loss,
+                    reconstruction_loss=recon_loss,
+                    kl_loss=kl_loss,
+                    weights=loss_weights,
+                )
+        else:
+            # Milestone A/B: model(x) returns list[Tensor] of logits.
+            logits = out
+            cls_loss = multi_head_cross_entropy(
+                logits, targets, class_weights_per_dim=class_weights_per_dim
+            )
+            total_loss, _ = aggregate_total_loss(
+                classification_loss=cls_loss, weights=loss_weights
+            )
+
         total_loss.backward()
         if grad_clip_norm is not None:
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
@@ -149,7 +215,7 @@ def train_one_epoch(
             batch_size=batch_size,
         )
 
-    return sums.finalize()
+    return sums.finalize(), loss_priors
 
 
 @torch.no_grad()
@@ -191,13 +257,33 @@ def validate(
         targets = batch["targets"].to(device, non_blocking=True)
         batch_size = int(x.shape[0])
 
-        logits = model(x)
-        cls_loss = multi_head_cross_entropy(
-            logits, targets, class_weights_per_dim=class_weights_per_dim
-        )
-        total_loss, _ = aggregate_total_loss(
-            classification_loss=cls_loss, weights=loss_weights
-        )
+        out = model(x)
+        # Detect variational vs classifier-only output (same logic as train).
+        if isinstance(out, VariationalOutput):
+            logits = out.logits
+            cls_loss = multi_head_cross_entropy(
+                logits, targets, class_weights_per_dim=class_weights_per_dim
+            )
+            recon_loss = None
+            if out.reconstruction is not None:
+                recon_loss = masked_mse_reconstruction_loss(
+                    out.reconstruction, x, batch_dim=0
+                )
+            kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
+            total_loss, _ = aggregate_total_loss(
+                classification_loss=cls_loss,
+                reconstruction_loss=recon_loss,
+                kl_loss=kl_loss,
+                weights=loss_weights,
+            )
+        else:
+            logits = out
+            cls_loss = multi_head_cross_entropy(
+                logits, targets, class_weights_per_dim=class_weights_per_dim
+            )
+            total_loss, _ = aggregate_total_loss(
+                classification_loss=cls_loss, weights=loss_weights
+            )
 
         sums.update(
             total_loss=total_loss.item(),

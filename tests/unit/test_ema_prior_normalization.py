@@ -14,6 +14,8 @@ Covers the math from ``cgg_getLossInformation.m`` (Critical Notes #6, #30):
 
 from __future__ import annotations
 
+from typing import Optional
+
 import pytest
 import torch
 
@@ -23,6 +25,18 @@ from neural_data_decoding.training.losses.multi_objective import (
     aggregate_normalized_losses,
     aggregate_total_loss,
 )
+
+
+def _f(t: Optional[torch.Tensor]) -> float:
+    """Narrow ``Optional[Tensor]`` to ``float`` for assertions.
+
+    The orchestrator returns ``None`` for inactive components; in tests we
+    know which components were activated and assert on the resulting
+    values. This helper makes pyright happy without scattering
+    ``assert ... is not None`` lines through every test.
+    """
+    assert t is not None
+    return float(t)
 
 
 # ───────────────────────── First-iteration semantics ─────────────────────────
@@ -42,9 +56,9 @@ def test_first_iteration_classification_only_reduces_to_weight() -> None:
         priors=LossPriors.initial(),
     )
     assert float(out.total) == pytest.approx(6.0)            # raw * weight
-    assert float(out.classification) == pytest.approx(6.0)
+    assert _f(out.classification) == pytest.approx(6.0)
     # Updated prior = the current raw (first iteration).
-    assert float(out.updated_priors.classification) == pytest.approx(2.0)
+    assert _f(out.updated_priors.classification) == pytest.approx(2.0)
 
 
 def test_first_iteration_classification_plus_reconstruction_uses_class_prior_for_rescale() -> None:
@@ -64,8 +78,8 @@ def test_first_iteration_classification_plus_reconstruction_uses_class_prior_for
     # Class contribution: 2.0 * 1.0 = 2.0
     # Recon contribution: 2.0 * 4.0 = 8.0 (cross-normalized so recon == class*weight)
     # Total: 10.0
-    assert float(out.classification) == pytest.approx(2.0)
-    assert float(out.reconstruction) == pytest.approx(8.0)
+    assert _f(out.classification) == pytest.approx(2.0)
+    assert _f(out.reconstruction) == pytest.approx(8.0)
     assert float(out.total) == pytest.approx(10.0)
 
 
@@ -83,8 +97,8 @@ def test_rescale_value_falls_back_to_reconstruction_when_no_classification() -> 
     # Recon: 5/5 * 5 * 1 = 5
     # KL:    2/2 * 5 * 3 = 15
     # Total: 20
-    assert float(out.reconstruction) == pytest.approx(5.0)
-    assert float(out.kl) == pytest.approx(15.0)
+    assert _f(out.reconstruction) == pytest.approx(5.0)
+    assert _f(out.kl) == pytest.approx(15.0)
     assert float(out.total) == pytest.approx(20.0)
 
 
@@ -102,7 +116,7 @@ def test_subsequent_iteration_uses_ema_update() -> None:
         prior_proportion=0.9,
     )
     # new_prior = 4.0 * 0.1 + 2.0 * 0.9 = 0.4 + 1.8 = 2.2
-    assert float(out.updated_priors.classification) == pytest.approx(2.2)
+    assert _f(out.updated_priors.classification) == pytest.approx(2.2)
 
 
 def test_update_priors_false_keeps_prior_constant() -> None:
@@ -133,6 +147,7 @@ def test_prior_is_detached_after_update() -> None:
         weights={"classification": 1.0},
         priors=LossPriors.initial(),
     )
+    assert out.updated_priors.classification is not None
     assert not out.updated_priors.classification.requires_grad
 
 
@@ -186,8 +201,8 @@ def test_confidence_beta_multiplies_confidence_only() -> None:
         confidence_beta=3.0,
     )
     # Confidence with β=1 is 2.0, with β=3 is 6.0; classification stays 2.0.
-    assert float(out_b3.confidence) == pytest.approx(3 * float(out_b1.confidence))
-    assert float(out_b3.classification) == pytest.approx(float(out_b1.classification))
+    assert _f(out_b3.confidence) == pytest.approx(3 * _f(out_b1.confidence))
+    assert _f(out_b3.classification) == pytest.approx(_f(out_b1.classification))
 
 
 # ───────────────────────── Assembly (Loss_Decoder / Loss_Classifier) ─────────────────────────
@@ -205,7 +220,7 @@ def test_decoder_sums_recon_kl_offset_scale() -> None:
     # With no classification, rescale falls back to recon's prior = 1.
     # Recon: 1/1 * 1 * 1 = 1; KL: 2/2 * 1 * 1 = 1; OffsetScale: 3/3 * 1 * 1 = 1.
     # Decoder = 1 + 1 + 1 = 3.
-    assert float(out.decoder) == pytest.approx(3.0)
+    assert _f(out.decoder) == pytest.approx(3.0)
     assert out.classifier is None  # no classification or confidence
     assert float(out.total) == pytest.approx(3.0)
 
@@ -219,7 +234,7 @@ def test_classifier_sums_classification_confidence() -> None:
         priors=LossPriors.initial(),
     )
     # Class: 2/2 * 2 * 1 = 2; Conf: 4/4 * 2 * 1 = 2. Classifier = 4.
-    assert float(out.classifier) == pytest.approx(4.0)
+    assert _f(out.classifier) == pytest.approx(4.0)
     assert out.decoder is None
     assert float(out.total) == pytest.approx(4.0)
 
@@ -235,8 +250,8 @@ def test_total_is_decoder_plus_classifier() -> None:
     # First iter: rescale = class prior = 2.0.
     # Recon: 1/1 * 2 * 1 = 2; Class: 2/2 * 2 * 1 = 2.
     # Decoder = 2; Classifier = 2; total = 4.
-    assert float(out.decoder) == pytest.approx(2.0)
-    assert float(out.classifier) == pytest.approx(2.0)
+    assert _f(out.decoder) == pytest.approx(2.0)
+    assert _f(out.classifier) == pytest.approx(2.0)
     assert float(out.total) == pytest.approx(4.0)
 
 

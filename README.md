@@ -5,12 +5,15 @@ implementing a variational autoencoder + multi-head classifier for multi-probe
 ephys data. Reproduces the active production path in modern PyTorch while writing
 `.mat`-compatible output where MATLAB-side analysis still consumes it.
 
-> **Status: Milestone B complete; Milestone C (Full Optimal) in progress.**
-> Milestones 0 (foundation), A (logistic tracer), and B (GRU + classifier) are
-> done and runnable end-to-end on synthetic data, with single-step forward-pass
-> parity against MATLAB verified to ~1e-9. See [`docs/PLAN.md`](docs/PLAN.md)
-> for the full migration plan, milestone sequence, and the MATLAB quirks that
-> must be preserved.
+> **Status: Milestone C core complete; A/B/C all smoke-runnable end-to-end.**
+> Milestones 0 (foundation), A (logistic tracer), B (GRU + classifier), and
+> Milestone C's variational core (VAE sampling + ELBO + confidence
+> PD-controller + MIL pooling + EMA prior normalization + variational training
+> integration) are done. Remaining for C: dynamic curriculum schedules, full
+> two-stage lifecycle, integration of confidence + MIL into the variational
+> forward path. T2 parity against MATLAB verified to ~1e-9 (composite forward),
+> ~1e-10 (confidence kernel), 1e-6 (ELBO + MIL + sampling). See
+> [`docs/PLAN.md`](docs/PLAN.md) for the full migration plan.
 
 ## Quickstart
 
@@ -39,14 +42,28 @@ python -m neural_data_decoding train --config-name A_logistic_synthetic --fold 1
 # Milestone B — GRU encoder + Deep LSTM classifier.
 python -m neural_data_decoding train --config-name B_gru_classifier_synthetic --fold 1
 
+# Milestone C — Stochastic VAE (GRU encoder → 2*latent bottleneck → sampling →
+# decoder + Deep LSTM classifier). EMA prior normalization across recon+KL+
+# classification; both validation and test CM_Tables written.
+python -m neural_data_decoding train --config-name C_optimal_synthetic --fold 1
+
 # Pre-flight check (aborts if a prior run's checkpoints would be clobbered).
-python -m neural_data_decoding check-existing --config-name B_gru_classifier_synthetic --fold 1
+python -m neural_data_decoding check-existing --config-name C_optimal_synthetic --fold 1
 ```
 
 Output lands under `<repo>/results/<Epoch>/<Target>/<ModelName>/cfg-<hash>/fold-<N>/`
-(gitignored): `CM_Table_Validation.mat`, `EncodingParameters.yaml`,
-`current_state.pt`, `optimal_state.pt`. Point `--output-root` at your
-`ACCRE_DATA` scratch directory for cluster-equivalent paths.
+(gitignored):
+
+- `CM_Table_Validation.mat` — written each epoch from the validation split
+  during training; drives the Optimal-snapshot model selection.
+- `CM_Table.mat` — written once at the end, after restoring the Optimal
+  weights and running on the held-out **test** split. This is what
+  downstream MATLAB analysis aggregates for the final reported results.
+- `EncodingParameters.yaml`, `current_state.pt`, `optimal_state.pt` —
+  resolved config + resume/best checkpoints.
+
+Point `--output-root` at your `ACCRE_DATA` scratch directory for
+cluster-equivalent paths.
 
 ## What works today
 

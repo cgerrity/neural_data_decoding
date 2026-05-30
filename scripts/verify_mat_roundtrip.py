@@ -22,7 +22,8 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     """Verify that Python-generated ``.mat`` files round-trip through MATLAB."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    description = (__doc__ or "").splitlines()[0] if __doc__ else ""
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
         "--input-dir",
         required=True,

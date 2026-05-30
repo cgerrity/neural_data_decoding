@@ -69,6 +69,7 @@ from neural_data_decoding.training.checkpoint import (
     save_optimal_checkpoint,
 )
 from neural_data_decoding.training.loop import EpochMetrics, train_one_epoch, validate
+from neural_data_decoding.training.losses.multi_objective import LossPriors
 
 
 @dataclass(slots=True)
@@ -111,6 +112,8 @@ def fit_supervised(
     class_weights_per_dim: Optional[list[torch.Tensor]] = None,
     grad_clip_norm: Optional[float] = None,
     epoch_callback: Optional[EpochCallback] = None,
+    loss_priors: Optional[LossPriors] = None,
+    prior_proportion: float = 0.9,
 ) -> list[EpochHistory]:
     """Run the supervised Stage 2 fit loop end-to-end.
 
@@ -179,7 +182,7 @@ def fit_supervised(
 
     history: list[EpochHistory] = []
     for epoch in range(start_epoch, num_epochs):
-        train_metrics = train_one_epoch(
+        train_metrics, loss_priors = train_one_epoch(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
@@ -187,6 +190,8 @@ def fit_supervised(
             loss_weights=loss_weights,
             class_weights_per_dim=class_weights_per_dim,
             grad_clip_norm=grad_clip_norm,
+            loss_priors=loss_priors,
+            prior_proportion=prior_proportion,
         )
         iteration += train_metrics.num_iterations
 

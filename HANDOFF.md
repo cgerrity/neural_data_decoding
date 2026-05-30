@@ -76,46 +76,90 @@ neural_data_decoding/
     └── api/                 # Sphinx source
 ```
 
-## Current status (2026-05-28)
+## Current status (2026-05-29)
 
 | Milestone | State | Parity precision |
 |-----------|-------|------------------|
 | 0 — Foundation | ✅ Complete | Stratification: element-for-element MATLAB |
-| A — Logistic tracer | ✅ Complete | CM_Table T4 round-trip |
-| B — GRU + Classifier | ✅ Complete | T2 encoder ~1e-7; composite ~1e-9 |
-| C — Full Optimal | 🚧 **In progress** — see "Next up" | VAE-core T2 ~1e-6 |
+| A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
+| B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
+| C — Full Optimal VAE | 🚧 **Core complete + variational smoke-runnable**; curriculum / two-stage / confidence-in-training-path pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10 |
 | CC — Extra-credit features | ⏳ Pending |  |
 | D — Cluster deployment | ⏳ Pending |  |
 
-Milestone C completed so far:
-- **VAE sampling layer** + parity (deterministic eval; matches `cgg_samplingLayer.predict`).
-- **NaN-to-zero input transform** + parity (Critical Note #38a).
-- **ELBO loss kernel** (NaN-masked MSE + KL + per-channel telemetry) — the
-  **highest-risk** silent-parity point per Critical Note #38 was resolved
-  empirically: `cgg_lossELBO_v2` divides by **batch_size**, not `mask.sum()`
-  (the plan's note was wrong; a regression-guard test now pins this).
-- **Variational architecture wiring** — `SimpleSequenceDecoder`,
+Milestone C status — what's done
+
+- **VAE sampling layer** + MATLAB parity (deterministic eval `Z = mu`).
+- **NaN→0 input transform** + parity (Critical Note #38a).
+- **ELBO** (NaN-masked MSE + KL + per-channel telemetry) — the highest-risk
+  silent-parity point was resolved empirically: `cgg_lossELBO_v2`
+  normalizes by **batch_size**, not `mask.sum()` (the plan's note was
+  wrong; a regression-guard test now pins this).
+- **Variational architecture** — `SimpleSequenceDecoder`,
   `VariationalComposite` (encoder → bottleneck(2×latent) → sampling →
   {decoder, classifier}), `build_variational_composite`.
-- **MIL softmax pooling** + parity (multi-axis softmax over Space/Channel/Time
-  jointly; `from_formats` mirrors MATLAB `find(ismember(...))`).
+- **MIL softmax pooling** + parity (multi-axis softmax across S/C/T;
+  `from_formats` mirrors MATLAB `find(ismember(...))`).
+- **Confidence routing + PD-controller** — all five Critical Note #29
+  subtleties parity-verified to ~1e-10 against MATLAB:
+  multiplicative conjunction, ConfidenceDropout, prediction-to-truth
+  interpolation, stop-grad on historical EMA, BatchFraction-governed
+  cadence. Eq. 10 batch correction also verified.
+- **EMA prior normalization** (Critical Notes #6, #30) —
+  `aggregate_normalized_losses` ports `cgg_getLossInformation` +
+  `cgg_processLossComponent`: per-component EMA (π=0.9 default), rescale
+  to Classification's prior, stop-grad on prior, assembly into
+  `Loss_Encoder = Loss_Decoder + Loss_Classifier` (Critical Note #28
+  single gradient root).
+- **Variational training integration** —
+  `train_one_epoch` / `validate` / `fit_supervised` detect
+  `VariationalOutput` automatically and thread `LossPriors` state across
+  iterations. CLI dispatches `is_variational` configs to
+  `build_variational_composite`. `configs/target_milestone/C_optimal_synthetic.yaml`
+  end-to-ends:
+  ```bash
+  python -m neural_data_decoding train --config-name C_optimal_synthetic --fold 1
+  ```
+- **Validation + Test CM_Tables** — the in-training (`CM_Table_Validation.mat`,
+  from final epoch state) and final-results (`CM_Table.mat`, from the
+  restored Optimal weights run on the held-out test split) are both
+  written. Matches the MATLAB pipeline's convention: validation drives
+  model selection during training; test is what downstream analysis
+  aggregates for the reported results.
 
-## Next up — Milestone C #3 (confidence routing)
+## Next up — Milestone C #5 (dynamic curriculum schedules)
 
-The next chunk is the **highest-risk port in the entire migration**
-(Critical Note #29): the confidence PD controller's five subtleties —
+Wire the curriculum classes that drive the augmentation magnitudes, loss
+weights, and freeze decisions per epoch (per Critical Notes #7, #8):
 
-1. Multiplicative conjunction (`TotalConfidence = TaskConfidence .* TrialConfidence`).
-2. Internal `ConfidenceDropout` (default 0.5, separate from network dropout).
-3. Prediction-toward-truth interpolation (`Y = TotalConfidence · Y + (1 -
-   TotalConfidence) · T`) — the *mechanism*, not postprocessing.
-4. Stop-gradient on historical EMA (`cgg_extractData` on the historical batch).
-5. `BatchFraction`-governed EMA cadence (NOT a fixed coefficient).
+- **LoadParameters / load_schedule.py** — augmentation magnitudes the
+  Dataset reads live each `__getitem__` (not snapshotted per epoch).
+- **WeightParameters / weight_schedule.py** — per-epoch loss weights
+  (drives KL annealing — Critical Note: `WeightDelayEpoch` / `WeightEpochRamp`).
+- **FreezeParameters / freeze_schedule.py** — per-network freeze
+  magnitudes (`cgg_setFrozenNetwork_v2`, Critical Note #4).
+- All schedules port `cgg_calculateDynamicValue` (piecewise-linear
+  interpolation between waypoints).
+- Add `RescaleLossEpoch` cadence to the training loop so EMA prior
+  updates respect the configured cadence (0=every iter, 1=per epoch,
+  >1=every N epochs).
 
-Plan calls for **mandatory golden-vector fixtures for each subtlety
-individually** plus an end-to-end one. Start by reading
-`Processing_Functions_cgg/ANN Functions/cgg_lossConfidence.m`, then design
-fixtures probing each subtlety in isolation before any Python code lands.
+After #5: **#6 — full two-stage lifecycle** (Stage 1 unsupervised
+pre-training with `NumEpochsAutoEncoder > 0`, then Stage 2 supervised
+with the classifier added). Plus KL annealing and hardware-aware
+accumulation table.
+
+## Quick command reference
+
+```bash
+# Smoke-test each runnable milestone config.
+python -m neural_data_decoding train --config-name A_logistic_synthetic --fold 1
+python -m neural_data_decoding train --config-name B_gru_classifier_synthetic --fold 1
+python -m neural_data_decoding train --config-name C_optimal_synthetic --fold 1
+
+# Pre-flight check (refuses to clobber existing checkpoints).
+python -m neural_data_decoding check-existing --config-name C_optimal_synthetic --fold 1
+```
 
 Remaining Milestone C items after #3, in order:
 - **#4 — EMA prior normalization** + variational training integration so the
@@ -140,19 +184,13 @@ Remaining Milestone C items after #3, in order:
   `Parameters` section (not `__init__`). `interrogate --fail-under=100`
   enforces it (config in `pyproject.toml`).
 
-## Useful commands
+## Regenerating MATLAB fixtures
 
-```bash
-# Smoke-test a runnable milestone config.
-python -m neural_data_decoding train --config-name A_logistic_synthetic --fold 1
-python -m neural_data_decoding train --config-name B_gru_classifier_synthetic --fold 1
-
-# Pre-flight check (refuses to clobber an existing run's checkpoints).
-python -m neural_data_decoding check-existing --config-name B_gru_classifier_synthetic --fold 1
-
-# Regenerate a single MATLAB fixture (the .mat lands under tests/fixtures/).
-matlab -batch "run('scripts/generate_t2_elbo_fixture.m')"
-```
+Parity fixtures live at `tests/fixtures/golden_weights/*.mat` (gitignored).
+Regenerate any one with `matlab -batch "run('scripts/generate_t2_<name>_fixture.m')"`
+or all of Milestone N's via `python scripts/prepare_golden_fixtures.py --milestone N`.
+Current generators: stratification, T2 encoder (GRU+LSTM), T2 composite,
+T2 ELBO, T2 MIL softmax, T2 confidence, CM_Table conversion.
 
 ## See also
 

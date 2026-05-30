@@ -150,4 +150,5 @@ def test_aggregate_is_differentiable() -> None:
     )
     total.backward()
     # d/dx [3 * x^2] = 6x; at x=2 that's 12.
+    assert x.grad is not None
     assert x.grad.item() == pytest.approx(12.0)

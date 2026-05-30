@@ -140,7 +140,8 @@ def prepare_milestone_c() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and dispatch to the requested milestone preparation step."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    description = (__doc__ or "").splitlines()[0] if __doc__ else ""
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
         "--milestone",
         choices=["0", "A", "B", "C"],
