@@ -43,8 +43,8 @@ from .models.bottleneck import LinearBottleneck, PassthroughBottleneck
 from .models.classifier import MultiHeadClassifier
 from .models.composite import EncoderClassifierComposite, build_variational_composite
 from .models.registry import build_classifier, build_encoder
-from .training.checkpoint import has_existing_checkpoint, load_optimal_checkpoint
-from .training.lifecycle import fit_supervised
+from .training.checkpoint import has_existing_checkpoint
+from .training.lifecycle import EpochHistory, fit_supervised
 from .training.losses.multi_objective import LossPriors
 from .training.losses.classification import inverse_frequency_class_weights
 
@@ -228,6 +228,24 @@ def _cmd_train(args: argparse.Namespace) -> int:
         loss_weights_dict = {"classification": float(cfg.weight_classification)}
         initial_priors = None
 
+    # Whenever an epoch becomes the new best validation metric, write BOTH
+    # CM_Tables from the just-optimal model state. The on-disk files always
+    # reflect the best-so-far model — inspectable mid-training, available
+    # even if training is killed before completion. Matches MATLAB's
+    # cgg_trainNetwork.m:636-641 pattern (both saves gated on IsOptimal).
+    def _on_optimal(opt_model: torch.nn.Module, entry: EpochHistory) -> None:
+        _write_cm_table_for_split(
+            opt_model, val_loader, result_dir / VALIDATION_CM_TABLE_FILENAME
+        )
+        _write_cm_table_for_split(
+            opt_model, test_loader, result_dir / TEST_CM_TABLE_FILENAME
+        )
+        val_acc = entry.val.accuracy if entry.val is not None else float("nan")
+        print(
+            f"  ↳ New optimal at epoch {entry.epoch} (val acc {val_acc:.3f}); "
+            "CM_Table_Validation.mat + CM_Table.mat updated."
+        )
+
     history = fit_supervised(
         model=model,
         train_loader=train_loader,
@@ -240,34 +258,9 @@ def _cmd_train(args: argparse.Namespace) -> int:
         class_weights_per_dim=class_weights,
         grad_clip_norm=float(cfg.gradient_threshold),
         epoch_callback=_print_epoch,
+        on_optimal_callback=_on_optimal,
         loss_priors=initial_priors,
         prior_proportion=float(cfg.get("prior_proportion", 0.9)),
-    )
-
-    # Write the validation CM_Table from the in-memory (end-of-training)
-    # model state. This is consumed during training by cgg_saveValidationCMTable
-    # downstream for model selection / sanity checks.
-    _write_cm_table_for_split(
-        model, val_loader, result_dir / VALIDATION_CM_TABLE_FILENAME
-    )
-
-    # Restore the Optimal (best-validation) weights and run on the held-out
-    # test split. This produces the CM_Table.mat that downstream MATLAB
-    # analysis (DATA_cggAllNetworkEncoderResults.m etc.) aggregates for the
-    # final reported results.
-    optimal_info = load_optimal_checkpoint(result_dir, model=model)
-    if optimal_info is not None:
-        print(
-            f"Restored Optimal weights (epoch {optimal_info['epoch']}, "
-            f"val metric {optimal_info['metric']:.4f}) for test pass."
-        )
-    else:
-        print(
-            "No Optimal snapshot was written (val_loader=None or no "
-            "improvement seen); writing test CM_Table from the final model state."
-        )
-    _write_cm_table_for_split(
-        model, test_loader, result_dir / TEST_CM_TABLE_FILENAME
     )
 
     final_val_acc = history[-1].val.accuracy if history and history[-1].val else None

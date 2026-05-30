@@ -97,6 +97,14 @@ class EpochHistory:
 
 
 EpochCallback = Callable[[EpochHistory], None]
+OnOptimalCallback = Callable[[nn.Module, "EpochHistory"], None]
+"""Hook called whenever the current epoch becomes the new best validation
+metric. Receives the current model (with the just-saved Optimal weights)
+and the populated :class:`EpochHistory` for the epoch. Used by the CLI to
+write the validation + test CM_Tables — both reflect the optimal model's
+predictions and are inspectable mid-training (matches MATLAB's
+``cgg_saveValidationCMTable`` + ``cgg_saveCMTableFromSeparateNetwork``
+pattern, both gated on ``IsOptimal``)."""
 
 
 def fit_supervised(
@@ -112,6 +120,7 @@ def fit_supervised(
     class_weights_per_dim: Optional[list[torch.Tensor]] = None,
     grad_clip_norm: Optional[float] = None,
     epoch_callback: Optional[EpochCallback] = None,
+    on_optimal_callback: Optional[OnOptimalCallback] = None,
     loss_priors: Optional[LossPriors] = None,
     prior_proportion: float = 0.9,
 ) -> list[EpochHistory]:
@@ -227,10 +236,23 @@ def fit_supervised(
             epoch=epoch, train=train_metrics, val=val_metrics, is_best=is_best
         )
         history.append(entry)
+
+        # MATLAB pattern (cgg_trainNetwork.m:636-641): when IsOptimal, write
+        # both CM_Tables with the just-saved Optimal weights. The on-disk
+        # files always reflect the best-so-far model — inspectable
+        # mid-training, no end-of-training restore-and-recompute dance.
+        if is_best and on_optimal_callback is not None:
+            on_optimal_callback(model, entry)
+
         if epoch_callback is not None:
             epoch_callback(entry)
 
     return history
 
 
-__all__ = ["EpochCallback", "EpochHistory", "fit_supervised"]
+__all__ = [
+    "EpochCallback",
+    "EpochHistory",
+    "OnOptimalCallback",
+    "fit_supervised",
+]
