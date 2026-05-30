@@ -160,9 +160,17 @@ Milestone C status — what's done
   bare string). The `Confidence_Beta` P-controller is now part of
   `ConfidenceHistory`: a separate MATLAB fixture probes
   `cgg_getConfidenceLossInformation` across three batches and pins Beta
-  to ~1e-12 (also covers MATLAB subtlety where the Beta update uses the
-  FULL-tensor mean of TotalConfidence, not the last-timestep mean the
-  EMA path uses). `train_one_epoch` threads `ConfidenceHistory` across
+  to ~1e-12. The fixture pre-reduces TrialConfidence/TaskConfidence
+  via `cgg_getLastSequenceValue` + flatten/transpose before calling
+  the inner function, mirroring the production data flow where
+  `cgg_getClassifierOutputsFromProbabilities` strips the T axis (lines
+  197/207) and stores last-timestep values in `CM_Table.TrialConfidence`
+  / `CM_Table.TaskConfidence`, which `cgg_lossComponents` then reassigns
+  back into the local variables (lines 441/447) before passing along
+  the chain. So when `cgg_getConfidenceLossInformation.m` line 51
+  reads `mean(TotalConfidence, "all")`, the T axis is already gone —
+  the average is over `B*K` elements, matching the Python kernel's
+  last-timestep `total_undropped.mean()`. `train_one_epoch` threads `ConfidenceHistory` across
   iterations (like `LossPriors`), advancing Beta + EMAs per batch and
   passing the live Beta to `aggregate_normalized_losses.confidence_beta`.
   `C_optimal_synthetic.yaml` now enables `confidence_type: ['Trial', 'Task']`

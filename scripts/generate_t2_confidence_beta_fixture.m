@@ -7,8 +7,34 @@
 % Confidence_Beta + the three EMA values after each call. The Python
 % parity test reproduces every value to ~1e-12.
 %
-% The Beta update is documented in cgg_getConfidenceLossInformation.m
-% lines 60-75 (despite the function name, it's a pure P-controller):
+% IMPORTANT — production data flow into the Beta computation
+% -----------------------------------------------------------
+% In production (cgg_lossComponents → cgg_getClassifierOutputsFromProbabilities
+% → cgg_lossComponents → cgg_getLossInformation → cgg_getConfidenceLossInformation),
+% TrialConfidence and TaskConfidence are ALREADY last-timestep-reduced
+% before reaching cgg_getConfidenceLossInformation:
+%
+%   1. cgg_getClassifierOutputsFromProbabilities.m line 197 calls
+%      ``TrialConfidence = cgg_getLastSequenceValue(TrialConfidence)``
+%      and stores the result in ``CM_Table.TrialConfidence`` as ``(B,1)``
+%      via the ``(:)`` flatten on line 199.
+%   2. Line 207 does the same for TaskConfidence, then transposes to
+%      ``(B,K)`` on line 209.
+%   3. cgg_lossComponents.m lines 441/447 REASSIGN the local
+%      TrialConfidence/TaskConfidence from those CM_Table columns
+%      BEFORE calling cgg_getLossInformation.
+%
+% So when cgg_getConfidenceLossInformation.m line 51 runs
+% ``mean(TotalConfidence, "all")`` it averages B*K elements, NOT B*T*K
+% — even though that file in isolation appears to consume a full tensor.
+%
+% This fixture mirrors that production path: pre-reduce inputs with
+% ``cgg_getLastSequenceValue`` + ``(:)`` flatten / transpose BEFORE
+% calling cgg_getConfidenceLossInformation.
+%
+% The Beta update itself (cgg_getConfidenceLossInformation.m lines 60-75)
+% is a pure P-controller despite the "Autonomous Equilibrium Controller"
+% name:
 %   diff       = ConfidenceTarget - batchMeanTotal     (target = 0.5)
 %   beta_next  = beta_prev * (1 + diff * rate)         (rate = 1.0)
 %   beta_next  = clamp(beta_next, [0.1, 10])
@@ -82,8 +108,19 @@ loss_arr_nan = dlarray(NaN(1, K));
 states = cell(NumBatches, 1);
 for bidx = 1:NumBatches
     b = batches{bidx};
+    % Pre-reduce trial/task to last-timestep + extractData + flatten/transpose,
+    % mirroring cgg_getClassifierOutputsFromProbabilities.m lines 197-210
+    % → CM_Table → cgg_lossComponents.m lines 441/447 reassignment.
+    % NOTE: cgg_extractData strips the dlarray labels — required before
+    % the transpose because dlarray transpose can't permute labeled dims.
+    trial_last = cgg_getLastSequenceValue(b.trial_dl);   % drops T axis → (1, B) dlarray
+    trial_last = cgg_extractData(trial_last);            % strip labels → numeric (1, B)
+    task_last  = cgg_getLastSequenceValue(b.task_dl);    % drops T axis → (K, B) dlarray
+    task_last  = cgg_extractData(task_last);             % strip labels → numeric (K, B)
+    trial_for_loss = trial_last(:);                       % (B, 1) — matches CM_Table.(:)
+    task_for_loss  = task_last';                          % (B, K) — matches CM_Table'
     [~, LossInformation] = cgg_getConfidenceLossInformation( ...
-        LossInformation, b.trial_dl, b.task_dl, ...
+        LossInformation, trial_for_loss, task_for_loss, ...
         loss_arr_nan, loss_arr_nan, loss_arr_nan, ...
         ValidClassificationIndices, BatchFraction);
 

@@ -436,21 +436,21 @@ def apply_confidence_routing(
     assert total_undropped is not None
 
     # ── Beta P-controller (mirrors cgg_getConfidenceLossInformation) ──────
-    # MATLAB subtlety: the Beta controller uses the **full-tensor mean** of
-    # TotalConfidence (`mean(TotalConfidence, "all")` in
-    # cgg_getConfidenceLossInformation.m line 51) — NOT the last-timestep
-    # mean that the EMA / branch-loss path uses (which mirrors
-    # cgg_lossConfidence.m's cgg_getLastSequenceValue convention). Compute
-    # both means: the full one for Beta, the last-timestep ones for EMAs
-    # and losses.
-    if trial_confidence is not None and task_confidence is not None:
-        full_total = trial_confidence * task_confidence
-    elif trial_confidence is not None:
-        full_total = trial_confidence
-    else:
-        assert task_confidence is not None
-        full_total = task_confidence
-    beta_batch_mean = full_total.detach().mean()
+    # MATLAB subtlety: although cgg_getConfidenceLossInformation.m line 51
+    # reads ``mean(TotalConfidence, "all")`` (looks like a full-tensor
+    # mean if you read that file in isolation), the TrialConfidence /
+    # TaskConfidence variables are ALREADY last-timestep-reduced by the
+    # time they get there — cgg_getClassifierOutputsFromProbabilities.m
+    # lines 197 and 207 call ``cgg_getLastSequenceValue`` and the result
+    # is stored in ``CM_Table.TrialConfidence`` / ``CM_Table.TaskConfidence``
+    # (shapes ``(B,1)`` and ``(B,K)``), then cgg_lossComponents.m lines
+    # 441/447 reassigns the local TrialConfidence/TaskConfidence from
+    # those CM_Table columns BEFORE calling cgg_getLossInformation. So
+    # ``mean(TotalConfidence, "all")`` in the Beta computation actually
+    # averages B*K elements, not B*T*K. The Python equivalent is the
+    # already-last-timestep ``total_undropped`` (shape ``(B,K)`` after
+    # the conjunction). Use it as-is.
+    beta_batch_mean = total_undropped.detach().mean()
     new_beta = _update_confidence_beta(history.beta, beta_batch_mean)
 
     # ── Interpolation (Eq. 2, subtlety #3) ───────────────────────────────

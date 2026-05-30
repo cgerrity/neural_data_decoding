@@ -2,7 +2,8 @@
 
 Iterates :func:`apply_confidence_routing` across the same sequence of batches
 that ``scripts/generate_t2_confidence_beta_fixture.m`` ran through
-``cgg_getConfidenceLossInformation``, then asserts the post-batch
+``cgg_getConfidenceLossInformation`` (with **last-timestep-reduced** inputs,
+matching the production data flow — see below), then asserts the post-batch
 ``ConfidenceHistory.beta`` matches to ~1e-12.
 
 The test pins **only Beta**, not the EMA values. Reason: MATLAB's
@@ -15,6 +16,29 @@ while the regular EMA update applies from batch 2 onward. The Python
 on every call. Beta is computed directly from the batch mean of
 TotalConfidence and does NOT depend on the EMA state, so it is
 parity-clean regardless.
+
+Last-timestep subtlety
+----------------------
+
+When MATLAB ``cgg_getConfidenceLossInformation.m`` line 51 computes
+``batchMeanTotal = mean(TotalConfidence, "all")``, the
+``TotalConfidence`` it averages over has ALREADY been reduced to
+last-timestep (shape ``(B,K)``, not ``(B,T,K)``) by the calling chain:
+
+1. ``cgg_getClassifierOutputsFromProbabilities.m`` line 197 calls
+   ``cgg_getLastSequenceValue`` on the classifier's trial confidence
+   output and stores the result in ``CM_Table.TrialConfidence`` via the
+   ``(:)`` flatten on line 199. Same on lines 207-209 for task confidence
+   (transposed to ``(B,K)``).
+2. ``cgg_lossComponents.m`` lines 441 / 447 REASSIGN the local
+   ``TrialConfidence`` / ``TaskConfidence`` variables from the CM_Table
+   columns BEFORE calling ``cgg_getLossInformation``.
+
+So the production Beta uses an average over ``B*K`` elements (not
+``B*T*K``), which matches what the Python kernel already produces because
+``total_undropped`` is the last-timestep conjunction. The fixture script
+mirrors this by pre-reducing its inputs via ``cgg_getLastSequenceValue``
++ flatten/transpose before calling ``cgg_getConfidenceLossInformation``.
 """
 
 from __future__ import annotations
