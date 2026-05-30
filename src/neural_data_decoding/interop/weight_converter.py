@@ -487,9 +487,12 @@ def _coerce_weights_dict(fixture: Mapping[str, Any]) -> dict[str, np.ndarray]:
             )
         raw = raw.flat[0]
 
-    # mat_struct case.
+    # mat_struct case. After `.flat[0]` the static type is still ndarray, but
+    # at runtime the unwrapped element is a scipy.io.mat_struct. Reach for the
+    # attribute via getattr to bypass the (over-strict) static check.
     if hasattr(raw, "_fieldnames"):
-        return {name: getattr(raw, name) for name in raw._fieldnames}
+        fieldnames = getattr(raw, "_fieldnames")
+        return {name: getattr(raw, name) for name in fieldnames}
 
     # Dict case (e.g. mat73 loader or pre-flattened).
     if isinstance(raw, Mapping):

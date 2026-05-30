@@ -35,15 +35,9 @@ from collections.abc import Iterable
 from typing import TypeVar, Union, overload
 
 import numpy as np
+import torch
 
-try:  # PyTorch is a hard runtime dep, but typing-only imports keep this module light.
-    import torch
-
-    TensorLike = Union[np.ndarray, "torch.Tensor"]
-except ImportError:  # pragma: no cover
-    torch = None  # type: ignore[assignment]
-    TensorLike = np.ndarray  # type: ignore[misc]
-
+TensorLike = Union[np.ndarray, torch.Tensor]
 
 T = TypeVar("T", bound=TensorLike)
 

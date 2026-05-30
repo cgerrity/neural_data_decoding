@@ -152,10 +152,14 @@ def _cmd_train(args: argparse.Namespace) -> int:
     # Write the resolved EncodingParameters.yaml up-front (stable schema —
     # Critical Note #25). Sweep launchers will overwrite the schema_template
     # but this captures the resolved per-run config either way.
-    schema = OmegaConf.to_container(cfg, resolve=True)
-    assert isinstance(schema, dict)
-    # Drop Hydra-internal keys that shouldn't appear in the MATLAB-facing YAML.
-    schema = {k: v for k, v in schema.items() if k != "defaults"}
+    raw_schema = OmegaConf.to_container(cfg, resolve=True)
+    assert isinstance(raw_schema, dict)
+    # Drop Hydra-internal keys that shouldn't appear in the MATLAB-facing YAML;
+    # also stringify keys (OmegaConf can technically return int/bool keys though
+    # our configs never do — the str() narrows the type to dict[str, Any]).
+    schema: dict[str, Any] = {
+        str(k): v for k, v in raw_schema.items() if k != "defaults"
+    }
     write_encoding_parameters_yaml(
         result_dir / ENCODING_PARAMETERS_FILENAME,
         run_config=schema,

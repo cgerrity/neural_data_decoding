@@ -249,7 +249,10 @@ def _split_recursively(
         return [current_subset.copy()]
 
     # Pick out only the rows in the current subset, in DataNumber order.
-    mask = identifiers[data_number_column].isin(current_subset)
+    # `.tolist()` because `isin` accepts iterables but pandas' type stubs are
+    # strict about Series/Sequence; the ndarray → list copy is cheap relative
+    # to the subsequent DataFrame indexing.
+    mask = identifiers[data_number_column].isin(current_subset.tolist())
     subset_df = identifiers.loc[mask].copy()
 
     maintain, further = _split_into_groups(

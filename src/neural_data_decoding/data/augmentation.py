@@ -42,6 +42,7 @@ Examples
 from __future__ import annotations
 
 import math
+from typing import TypeGuard
 
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
@@ -201,7 +202,7 @@ def generate_time_shift_samples(
     return shifts_samples
 
 
-def _enabled(std: float | None) -> bool:
+def _enabled(std: float | None) -> TypeGuard[float]:
     """Return ``True`` iff ``std`` is a usable positive number.
 
     Treats ``None`` and ``NaN`` as disabled (matches the MATLAB
@@ -209,6 +210,10 @@ def _enabled(std: float | None) -> bool:
     negative standard deviation has no meaning; the MATLAB code does not
     range-check explicitly, but the Python implementation does to catch
     obvious config errors early.
+
+    The return is annotated as :class:`typing.TypeGuard` so that pyright /
+    Pylance narrow ``std`` from ``float | None`` to ``float`` in the True
+    branch — saving callers from redundant ``assert std is not None``.
     """
     if std is None:
         return False

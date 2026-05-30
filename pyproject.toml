@@ -92,6 +92,19 @@ ignore = [
 line-length = 100
 target-version = ["py310", "py311", "py312"]
 
+# ───────────────────────── Pyright / Pylance ─────────────────────────
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+exclude = ["**/__pycache__", "**/build", ".venv", "docs/build"]
+# torch lazy-loads many top-level attributes (torch.zeros, torch.isnan, torch.where,
+# torch.exp, torch.dtype, torch.device, …) that pyright doesn't see as exported.
+# Pylance / pyright then flags every use as reportPrivateImportUsage. These are
+# false positives — the attributes are part of torch's documented public API, just
+# not statically discoverable. Silence the rule rather than litter the codebase
+# with per-line ignores.
+reportPrivateImportUsage = "none"
+pythonVersion = "3.11"
+
 # ───────────────────────── Docstring coverage ─────────────────────────
 [tool.interrogate]
 # Constructor parameters are documented in the *class* docstring's

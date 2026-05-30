@@ -25,15 +25,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import mat73 as _mat73
 import scipy.io as _sio
-
-try:
-    import mat73 as _mat73
-
-    _MAT73_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    _mat73 = None
-    _MAT73_AVAILABLE = False
 
 
 # The first 8 bytes of an HDF5 file are this magic signature.
@@ -88,20 +81,13 @@ def load_mat(path: str | Path) -> dict[str, Any]:
     ------
     FileNotFoundError
         If ``path`` does not exist.
-    ImportError
-        If the file is v7.3 but the ``mat73`` package is not installed.
     """
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"No such file: {p}")
 
     if _is_hdf5_mat(p):
-        if not _MAT73_AVAILABLE:  # pragma: no cover
-            raise ImportError(
-                f"{p.name} is a MATLAB v7.3 (HDF5) file, but the 'mat73' package "
-                f"is not installed. Install it with `pip install mat73`."
-            )
-        return _mat73.loadmat(str(p))  # type: ignore[union-attr]
+        return _mat73.loadmat(str(p))
 
     return _sio.loadmat(str(p), squeeze_me=False, struct_as_record=False)
 
