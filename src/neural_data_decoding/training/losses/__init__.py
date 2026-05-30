@@ -16,6 +16,9 @@ from neural_data_decoding.training.losses.elbo import (
 )
 from neural_data_decoding.training.losses.multi_objective import (
     LossBreakdown,
+    LossPriors,
+    NormalizedLossBreakdown,
+    aggregate_normalized_losses,
     aggregate_total_loss,
 )
 
@@ -23,6 +26,9 @@ __all__ = [
     "ConfidenceHistory",
     "ConfidenceLossBreakdown",
     "LossBreakdown",
+    "LossPriors",
+    "NormalizedLossBreakdown",
+    "aggregate_normalized_losses",
     "aggregate_total_loss",
     "apply_confidence_routing",
     "inverse_frequency_class_weights",
