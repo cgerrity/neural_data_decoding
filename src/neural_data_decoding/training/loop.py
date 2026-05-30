@@ -44,6 +44,7 @@ from torch.utils.data import DataLoader
 
 from neural_data_decoding.models.composite import AutoencoderOutput, VariationalOutput
 from neural_data_decoding.training.losses.classification import (
+    interpolated_multi_head_cross_entropy,
     multi_head_cross_entropy,
 )
 from neural_data_decoding.training.losses.confidence import (
@@ -209,11 +210,15 @@ def train_one_epoch(
                 )
             kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
 
-            # Confidence (Milestone C #7): if the model produces trial or
-            # task confidence AND the caller threaded a ConfidenceHistory
-            # state, advance the Beta P-controller, EMAs, and per-branch
-            # losses. The summed branch losses become the confidence
-            # component; Beta scales it inside the prior normalizer.
+            # Confidence (Milestone C #7 + #7b): if the model produces
+            # trial or task confidence AND the caller threaded a
+            # ConfidenceHistory state, advance the Beta P-controller,
+            # EMAs, and per-branch losses. The summed branch losses
+            # become the confidence component; Beta scales it inside the
+            # prior normalizer. The dropped per-dim total confidence
+            # additionally drives Eq. 2 interpolated CE on the
+            # classification loss (C #7b — replaces the standard CE
+            # computed above when confidence is active).
             confidence_loss: Optional[torch.Tensor] = None
             confidence_beta_scalar: float = 1.0
             if confidence_history is not None and (
@@ -234,6 +239,18 @@ def train_one_epoch(
                 confidence_loss = cb.total_loss + cb.trial_loss + cb.task_loss
                 confidence_beta_scalar = float(cb.updated_history.beta)
                 confidence_history = cb.updated_history
+
+                # Eq. 2 interpolated CE replaces the standard CE on raw
+                # logits. Matches MATLAB cgg_lossClassification's
+                # crossentropy(Y_interpolated, T) on the post-dropout
+                # interpolated probabilities. Uses the SAME dropped
+                # confidence the branch-loss path used (via cb.total_dropped),
+                # so dropout consistency is preserved per call.
+                if cb.total_dropped is not None:
+                    cls_loss = interpolated_multi_head_cross_entropy(
+                        logits, targets, cb.total_dropped,
+                        class_weights_per_dim=class_weights_per_dim,
+                    )
 
             if loss_priors is not None:
                 breakdown = aggregate_normalized_losses(

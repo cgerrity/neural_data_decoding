@@ -22,7 +22,7 @@ the MATLAB sources are referenced for parity testing only.
   `Processing_Functions_cgg/`. The fallbacks try the parent of the project
   root (legacy layout) and a known absolute path; if neither works the
   fixture scripts error clearly.
-- **Tests:** `python -m pytest` runs the default 445 tests in ~3s. MATLAB-gated
+- **Tests:** `python -m pytest` runs the default 455 tests in ~3s. MATLAB-gated
   parity (`-m needs_matlab`) needs a MATLAB executable + the source root
   resolvable.
 - **Static checking:** `pyright` runs project-wide with zero errors. The
@@ -34,15 +34,16 @@ the MATLAB sources are referenced for parity testing only.
 ## Status & next step
 
 - Milestones 0 / A / B complete; Milestone C **core + curriculum +
-  two-stage + confidence routing** complete (VAE sampling, NaN mask,
-  ELBO, MIL softmax kernel, variational composite, confidence
+  two-stage + confidence + Eq. 2 CE** complete (VAE sampling, NaN
+  mask, ELBO, MIL softmax kernel, variational composite, confidence
   PD-controller kernel, EMA prior normalization, variational training
   integration, dynamic curriculum schedules with per-module freeze +
   live-read augmentation + RescaleLossEpoch cadence, full two-stage
   Stage 1 → handoff → Stage 2 with config-driven KL annealing,
   TrialConfidenceHead + TaskConfidenceHead grafted into the variational
-  composite with Beta P-controller threading per-batch) and end-to-end
-  smoke-runnable.
+  composite with Beta P-controller threading per-batch, and Eq. 2
+  interpolated cross-entropy replacing standard CE when confidence is
+  active) and end-to-end smoke-runnable.
 - Single-step T2 forward parity against MATLAB: ~1e-9 (composite
   forward), ~1e-10 (confidence kernel), 1e-6 (ELBO + MIL + sampling),
   ~1e-12 (curriculum interpolator + preset library).
@@ -54,9 +55,8 @@ the MATLAB sources are referenced for parity testing only.
   builds composite + classifier → runs 15 epochs supervised, with KL
   annealing visible in Stage 2 epochs 2-5 and the curriculum taking
   over at epochs 10+.
-- **Next step is Milestone C polish / cleanup or jump to CC/D.** Four
+- **Next step is Milestone C polish / cleanup or jump to CC/D.** Three
   options (see `HANDOFF.md` "Next up" for full descriptions):
-  - **C #7b**: Eq. 2 interpolated cross-entropy (confidence-weighted CE).
   - **C #8**: MIL softmax pooling in the variational forward path.
   - **C accumulation**: hardware-aware gradient accumulation table.
   - **CC** (extra-credit features) or **D** (cluster deployment).

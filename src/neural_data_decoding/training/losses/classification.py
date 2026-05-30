@@ -195,7 +195,127 @@ def inverse_frequency_class_weights(
     return weights
 
 
+def interpolated_multi_head_cross_entropy(
+    logits_per_dim: Sequence[torch.Tensor],
+    targets: torch.Tensor,
+    total_dropped: torch.Tensor,
+    *,
+    class_weights_per_dim: Sequence[torch.Tensor] | None = None,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """Per-dimension cross-entropy on confidence-interpolated predictions (Eq. 2).
+
+    Mirrors the MATLAB chain ``cgg_lossClassification`` → ``cgg_lossConfidence``
+    (line 75 ``Y = c .* Y + (1 - c) .* T``) → ``crossentropy(Y_interpolated, T)``.
+
+    For one-hot targets, the interpolation collapses to a single scalar per
+    timestep per trial:
+
+    .. math::
+
+        Y'[k^*] = c \\cdot p_{target} + (1 - c)
+        \\quad\\text{(where }k^*\\text{ is the true class)}
+
+    and the cross-entropy reduces to :math:`-\\log(Y'[k^*])`. This avoids
+    materializing the full interpolated probability tensor; we gather the
+    predicted target probability and apply the closed-form.
+
+    Parameters
+    ----------
+    logits_per_dim
+        Per-output-dimension logits, each ``(batch, time, num_classes_d)``.
+    targets
+        Integer class labels, shape ``(batch, num_dimensions)``.
+    total_dropped
+        Per-trial TotalConfidence after dropout, shape ``(B, K_conf)``.
+        ``K_conf`` is ``1`` (Trial-only — same confidence shared across
+        all output dims, broadcast) or ``num_dimensions`` (per-dim Task or
+        Trial × Task conjunction). Other shapes raise.
+    class_weights_per_dim
+        Optional per-dim inverse-frequency class weight vectors (same
+        contract as :func:`multi_head_cross_entropy`).
+    eps
+        Lower clamp on the interpolated probability before ``log`` to
+        avoid ``-inf`` at zero confidence on a wrong prediction.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar (0-D) summed across dimensions of per-dim mean interpolated
+        cross-entropy. Same reduction convention as
+        :func:`multi_head_cross_entropy`.
+
+    Raises
+    ------
+    ValueError
+        On shape inconsistencies between ``logits_per_dim``, ``targets``,
+        and ``total_dropped``.
+    """
+    if not logits_per_dim:
+        raise ValueError("logits_per_dim must be a non-empty sequence.")
+
+    num_dimensions = len(logits_per_dim)
+    if targets.ndim != 2 or targets.shape[1] != num_dimensions:
+        raise ValueError(
+            f"targets must have shape (batch, {num_dimensions}); "
+            f"got shape {tuple(targets.shape)}."
+        )
+    if total_dropped.ndim != 2:
+        raise ValueError(
+            f"total_dropped must be 2-D (batch, K_conf); "
+            f"got shape {tuple(total_dropped.shape)}."
+        )
+    k_conf = total_dropped.shape[-1]
+    if k_conf != 1 and k_conf != num_dimensions:
+        raise ValueError(
+            f"total_dropped.shape[-1] ({k_conf}) must be 1 (shared "
+            f"across dims) or num_dimensions ({num_dimensions}) — got "
+            f"neither."
+        )
+    if class_weights_per_dim is not None and len(class_weights_per_dim) != num_dimensions:
+        raise ValueError(
+            f"class_weights_per_dim must have {num_dimensions} entries; "
+            f"got {len(class_weights_per_dim)}."
+        )
+
+    total = torch.zeros((), dtype=logits_per_dim[0].dtype, device=logits_per_dim[0].device)
+
+    for dim_idx, logits in enumerate(logits_per_dim):
+        if logits.ndim != 3:
+            raise ValueError(
+                f"interpolated CE requires (batch, time, num_classes) "
+                f"logits; got shape {tuple(logits.shape)} for dim {dim_idx}."
+            )
+        batch, time, _ = logits.shape
+        dim_target = targets[:, dim_idx]                          # (B,)
+
+        # Slice per-dim confidence — broadcast across dims when K_conf == 1.
+        c_slice = total_dropped[:, 0] if k_conf == 1 else total_dropped[:, dim_idx]
+        # Shape (B, 1) for time-axis broadcast.
+        c = c_slice.unsqueeze(-1)
+
+        # Predicted probability of the true class at every timestep.
+        probs = torch.softmax(logits, dim=-1)                     # (B, T, K_d)
+        target_broadcast = dim_target.view(batch, 1, 1).expand(batch, time, 1)
+        p_target = probs.gather(-1, target_broadcast).squeeze(-1)  # (B, T)
+
+        # Closed-form interpolated CE for one-hot targets:
+        # Y'[target] = c * p_target + (1 - c) → -log(...)
+        interpolated = c * p_target + (1.0 - c)
+        per_trial_loss = -torch.log(interpolated.clamp(min=eps))   # (B, T)
+
+        if class_weights_per_dim is not None:
+            weights = class_weights_per_dim[dim_idx]              # (K_d,)
+            per_trial_weight = weights.gather(0, dim_target)       # (B,)
+            per_trial_loss = per_trial_loss * per_trial_weight.unsqueeze(-1)
+
+        total = total + per_trial_loss.mean()
+
+    return total
+
+
 __all__ = [
+    "interpolated_multi_head_cross_entropy",
     "inverse_frequency_class_weights",
     "multi_head_cross_entropy",
 ]

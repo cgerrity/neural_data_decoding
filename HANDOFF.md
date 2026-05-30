@@ -2,7 +2,7 @@
 
 A self-contained snapshot of project state, conventions, and the next step.
 Intended for a fresh contributor (human or AI) picking up the work — read
-top-to-bottom, then start at "Next up". Last updated 2026-05-29.
+top-to-bottom, then start at "Next up". Last updated 2026-05-30.
 
 ## Where the project lives
 
@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **445 passed, 4 deselected** by default; **4 passed** under
+Expected: **455 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -83,7 +83,7 @@ neural_data_decoding/
 | 0 — Foundation | ✅ Complete | Stratification: element-for-element MATLAB |
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
-| C — Full Optimal VAE | 🚧 **Core + curriculum + two-stage + confidence routing complete**; MIL-in-training-path / accumulation table / Eq. 2 interpolated CE still pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12 |
+| C — Full Optimal VAE | 🚧 **Core + curriculum + two-stage + confidence routing + Eq. 2 interpolated CE complete**; MIL-in-training-path / accumulation table still pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; Eq. 2 CE analytical |
 | CC — Extra-credit features | ⏳ Pending |  |
 | D — Cluster deployment | ⏳ Pending |  |
 
@@ -148,6 +148,23 @@ Milestone C status — what's done
   shows augmentation, weights, and freeze ticking as expected and
   the train loss collapsing right when the classifier unfreezes
   at epoch 11.
+- **Eq. 2 interpolated cross-entropy** (Milestone C #7b) — port of the
+  MATLAB `cgg_lossClassification` → `cgg_lossConfidence` chain's per-dim
+  flow where the classifier cross-entropy is computed on the
+  *confidence-weighted blend of prediction and target* (`Y' = c * Y +
+  (1-c) * T`, line 75 of `cgg_lossConfidence.m`), then CE on `Y'`. For
+  one-hot targets the math collapses to `-log(c * p_target + (1-c))`
+  per-dim per-trial per-timestep, which the new
+  `interpolated_multi_head_cross_entropy` helper computes via gather +
+  closed-form (no full interpolated-prob tensor materialized). The
+  orchestrator reads `cb.total_dropped` from
+  `ConfidenceLossBreakdown` (new field — last-timestep × dropout, per-dim)
+  to ensure dropout consistency with the branch-loss path. With C #7's
+  Y_interpolated already at 1e-10 vs MATLAB (existing case A test) and
+  the analytical math directly verified for c=0/c=1/intermediate values,
+  the chain is transitively parity-verified. Smoke run with confidence
+  enabled hits val_acc 0.458 at epoch 18 (vs 0.396 in C #7 and 0.427 in
+  C #5) — the confidence-weighted regularization slows over-fitting.
 - **Confidence routing in variational forward path** (Milestone C #7) —
   the kernel (`apply_confidence_routing`) was already 1e-10 parity-verified
   in C #5; this milestone wired it through the model + loss orchestrator.
@@ -203,24 +220,11 @@ Milestone C status — what's done
 ## Next up — Milestone C polish / cleanup, then CC or D
 
 Milestone C's *active production path* is now end-to-end runnable
-including confidence routing. What remains is integration of features
-whose kernels exist but aren't yet woven into the variational forward
-path, plus hardware-aware tuning and the final Eq. 2 polish:
+including confidence routing AND Eq. 2 interpolated CE. What remains
+is integration of features whose kernels exist but aren't yet woven
+into the variational forward path, plus hardware-aware tuning:
 
-### Option A — Milestone C #7b: Eq. 2 interpolated cross-entropy
-
-Currently `train_one_epoch` calls `apply_confidence_routing` with
-`compute_interpolation=False` — the Trial/Task/Total losses and Beta
-flow through correctly, but the classification cross-entropy still uses
-raw logits (not the confidence-weighted interpolation). For exact
-MATLAB parity on the classification gradient signal, add per-dim
-interpolated cross-entropy: for each output dim `d` with predicted
-probability `p_target_d` (via softmax on logits_d), confidence weight
-`c = total_dropped_d`, the loss is `-mean(log(c * p_target_d + (1-c)))`
-instead of the standard `-mean(log(p_target_d))`. Small kernel addition
-to `losses/classification.py`; small touch in `train_one_epoch`.
-
-### Option B — Milestone C #8: MIL softmax pooling in the variational forward path
+### Option A — Milestone C #8: MIL softmax pooling in the variational forward path
 
 MIL softmax kernel exists and is parity-verified, but the variational
 classifier head currently emits per-timestep logits without the
@@ -228,7 +232,7 @@ multi-axis pooling reduction. Wiring is similar to confidence: add a
 MIL-aware classifier head, smoke-test with
 `multiple_instance_learning_type: MIL`.
 
-### Option C — Hardware-aware accumulation table (Critical Note #18)
+### Option B — Hardware-aware accumulation table (Critical Note #18)
 
 The CLI ignores `cfg.accumulation_information`; current code always
 uses `mini_batch_size` for the actual forward batch size. MATLAB's
@@ -237,7 +241,7 @@ optimizer step when the device's `MaxBatchSize` is smaller than
 `MiniBatchSize`. Implement gradient accumulation that respects the
 hardware table.
 
-### Option D — start Milestone CC (extra-credit features) or D (cluster deployment)
+### Option C — start Milestone CC (extra-credit features) or D (cluster deployment)
 
 If the deferred Milestone C items aren't blocking real-data runs, jump
 ahead to:

@@ -178,14 +178,25 @@ class ConfidenceLossBreakdown:
     ----------
     y_interpolated
         ``Y'`` from Eq. 2 — the confidence-weighted blend of the original
-        prediction and the target. The caller feeds this into the
-        classification cross-entropy.
+        prediction and the target. Populated only when the caller passes
+        ``compute_interpolation=True``; otherwise equals the input ``y``.
+        The caller feeds this into the classification cross-entropy (for
+        single-dim cases) or uses :attr:`total_dropped` to compute its
+        own per-dim interpolated CE.
     total_loss, trial_loss, task_loss
         The three branch losses (scalar). Sum these (or weight them) when
         assembling the multi-objective total.
     updated_history
         Fresh :class:`ConfidenceHistory` with the EMA-updated values, all
         detached. The caller persists this for the next minibatch.
+    total_dropped
+        Per-trial TotalConfidence (last-timestep × dropout), shape
+        ``(B, K_conf)``. ``K_conf`` is ``1`` when only Trial confidence is
+        active, ``K_task`` when only Task is active, or ``K_task`` when
+        both are conjuncted. Used by
+        :func:`interpolated_multi_head_cross_entropy` to compute per-dim
+        Eq. 2 interpolated cross-entropy without the orchestrator
+        re-running the dropout. ``None`` when no confidence is active.
     """
 
     y_interpolated: torch.Tensor
@@ -193,6 +204,7 @@ class ConfidenceLossBreakdown:
     trial_loss: torch.Tensor
     task_loss: torch.Tensor
     updated_history: ConfidenceHistory
+    total_dropped: Optional[torch.Tensor] = None
 
 
 def _last_timestep(x: torch.Tensor, *, time_dim: int) -> torch.Tensor:
@@ -501,6 +513,7 @@ def apply_confidence_routing(
         updated_history=ConfidenceHistory(
             total=new_total, trial=new_trial, task=new_task, beta=new_beta,
         ),
+        total_dropped=total_dropped,
     )
 
 

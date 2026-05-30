@@ -5,15 +5,15 @@ implementing a variational autoencoder + multi-head classifier for multi-probe
 ephys data. Reproduces the active production path in modern PyTorch while writing
 `.mat`-compatible output where MATLAB-side analysis still consumes it.
 
-> **Status: Milestone C core + curriculum + two-stage + confidence routing complete; A/B/C all smoke-runnable end-to-end.**
+> **Status: Milestone C core + curriculum + two-stage + confidence + Eq. 2 CE complete; A/B/C all smoke-runnable end-to-end.**
 > Milestones 0 (foundation), A (logistic tracer), B (GRU + classifier), and
 > Milestone C's variational core (VAE sampling + ELBO + confidence
 > PD-controller + MIL pooling + EMA prior normalization + variational training
 > integration + dynamic curriculum schedules + full two-stage lifecycle with
-> KL annealing + **confidence routing in the variational forward path with
-> Beta P-controller**) are done. Remaining for C: Eq. 2 interpolated CE,
-> MIL forward integration, hardware-aware accumulation. T2 parity against
-> MATLAB verified to ~1e-9 (composite forward), ~1e-10 (confidence kernel),
+> KL annealing + confidence routing with Beta P-controller + **Eq. 2
+> interpolated cross-entropy**) are done. Remaining for C: MIL forward
+> integration, hardware-aware accumulation. T2 parity against MATLAB
+> verified to ~1e-9 (composite forward), ~1e-10 (confidence kernel),
 > 1e-6 (ELBO + MIL + sampling), ~1e-12 (curriculum interpolator + Beta
 > P-controller). See [`docs/PLAN.md`](docs/PLAN.md) for the full migration plan.
 
@@ -86,7 +86,8 @@ cluster-equivalent paths.
 | VAE sampling, ELBO, confidence, MIL, curriculum schedules | ✅ Milestone C core |
 | Full two-stage lifecycle + KL annealing | ✅ Milestone C #6 |
 | Confidence routing in variational forward path | ✅ Milestone C #7 |
-| MIL in variational forward path; Eq. 2 interpolated CE | 🚧 Milestone C polish |
+| Eq. 2 interpolated cross-entropy | ✅ Milestone C #7b |
+| MIL in variational forward path | 🚧 Milestone C polish |
 
 ### Parity precision achieved (T2 single-step forward pass)
 
@@ -133,7 +134,7 @@ python -m pytest
 python -m pytest -m needs_matlab
 ```
 
-Currently **445 tests pass** in the default suite (plus 4 MATLAB-gated parity
+Currently **455 tests pass** in the default suite (plus 4 MATLAB-gated parity
 tests that run with `-m needs_matlab`).
 
 Parity tests compare against MATLAB-generated reference fixtures. Those fixtures
