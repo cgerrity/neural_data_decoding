@@ -709,3 +709,62 @@ def test_train_one_epoch_without_confidence_returns_none_history() -> None:
         loss_weights={"classification": 1.0},
     )
     assert history is None
+
+
+def test_validate_with_confidence_uses_interpolated_ce_no_dropout() -> None:
+    """validate() with confidence_history active uses Eq. 2 interpolated CE.
+
+    Verifies the eval-mode contract:
+    - Returns deterministic loss across two runs (no random dropout).
+    - Loss differs from validate() called WITHOUT confidence_history
+      (which would use standard CE on raw logits).
+    - The passed-in confidence_history is NOT mutated.
+    """
+    from neural_data_decoding.models.composite import build_variational_composite
+    from neural_data_decoding.training.loop import validate
+    from neural_data_decoding.training.losses.confidence import ConfidenceHistory
+
+    composite = build_variational_composite({
+        "in_features": 4, "hidden_sizes": [8, 2],
+        "num_classes_per_dim": [2, 3], "classifier_hidden_size": [4],
+        "loss_type_decoder": "MSE", "transform": "GRU",
+        "confidence_type": ["Trial", "Task"],
+    })
+    composite.eval()
+    ds = SyntheticTrialDataset(
+        num_sessions=1, trials_per_session=4,
+        num_samples=5, num_features=4, num_classes_per_dim=[2, 3],
+        seed=0,
+    )
+    loader = DataLoader(ds, batch_size=2, collate_fn=collate_trials)
+    weights = {"classification": 1.0, "reconstruction": 1.0, "kl": 0.01}
+
+    initial_history = ConfidenceHistory.initial(dtype=torch.float32)
+    # Snapshot beta + EMAs to verify non-mutation.
+    beta_before = float(initial_history.beta)
+
+    m1 = validate(
+        model=composite, dataloader=loader, device=torch.device("cpu"),
+        loss_weights=weights, confidence_history=initial_history,
+    )
+    m2 = validate(
+        model=composite, dataloader=loader, device=torch.device("cpu"),
+        loss_weights=weights, confidence_history=initial_history,
+    )
+    # Deterministic across two runs (no random dropout).
+    assert m1.classification_loss == pytest.approx(m2.classification_loss, abs=1e-9)
+    # The passed-in history must be unchanged (no side effects).
+    assert float(initial_history.beta) == beta_before
+
+    # With no confidence_history, validate falls back to standard CE
+    # → typically different loss value than the interpolated path.
+    m_no_conf = validate(
+        model=composite, dataloader=loader, device=torch.device("cpu"),
+        loss_weights=weights,  # no confidence_history
+    )
+    # Interpolated CE ≤ standard CE for positive confidences (interpolation
+    # mixes prediction with truth, never making it worse on the target). At
+    # initial random weights this should produce a strictly different value.
+    assert m_no_conf.classification_loss != pytest.approx(
+        m1.classification_loss, abs=1e-9,
+    )

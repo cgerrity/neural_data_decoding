@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **455 passed, 4 deselected** by default; **4 passed** under
+Expected: **459 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -148,6 +148,20 @@ Milestone C status — what's done
   shows augmentation, weights, and freeze ticking as expected and
   the train loss collapsing right when the classifier unfreezes
   at epoch 11.
+- **Confidence cleanup + validation interpolated CE** (Milestone C #7c) —
+  (i) renamed `_branch_loss` → `_compute_confidence_stream_loss` and
+  swept remaining "branch" references in docstrings/comments to "stream"
+  to avoid collision with "classification branch"; (ii) added
+  `symmetric_dropout: bool = False` ablation flag (default = MATLAB
+  asymmetric: per-stream losses use undropped); (iii) `validate()` now
+  threads an optional `ConfidenceHistory` and calls
+  `apply_confidence_routing(confidence_dropout=1.0)` for the eval pass —
+  uses interpolated CE without random masking, mirroring
+  `torch.nn.Dropout`'s eval-mode behavior (dropout is a training-time
+  regularizer). The validation updated_history is discarded (val must
+  not mutate training state). Smoke run: val_loss drops from ~3.5 (raw
+  CE) to ~0.26 (interpolated CE without dropout) — now on the same scale
+  as training loss instead of an unrelated magnitude.
 - **Eq. 2 interpolated cross-entropy** (Milestone C #7b) — port of the
   MATLAB `cgg_lossClassification` → `cgg_lossConfidence` chain's per-dim
   flow where the classifier cross-entropy is computed on the

@@ -272,6 +272,7 @@ def fit_supervised(
                 device=device,
                 loss_weights=epoch_loss_weights,
                 class_weights_per_dim=class_weights_per_dim,
+                confidence_history=confidence_history,
             )
             if val_metrics.accuracy > best_metric:
                 best_metric = val_metrics.accuracy

@@ -309,6 +309,7 @@ def validate(
     device: torch.device,
     loss_weights: Mapping[str, float],
     class_weights_per_dim: Optional[list[torch.Tensor]] = None,
+    confidence_history: Optional[ConfidenceHistory] = None,
 ) -> EpochMetrics:
     """Run one validation pass — no gradients, no BN updates (Critical Note #34).
 
@@ -326,6 +327,17 @@ def validate(
     class_weights_per_dim
         Class weights — typically the **training** distribution's weights
         (so the metric reflects training-aware loss); MATLAB does the same.
+    confidence_history
+        Optional :class:`ConfidenceHistory`. When provided AND the model
+        produces confidence outputs (Variational composite with confidence
+        heads), the validation classification loss is computed using
+        Eq. 2 interpolated cross-entropy — comparable to the training
+        loss — with ``confidence_dropout=1.0`` (no random masking). This
+        mirrors :class:`torch.nn.Dropout`'s eval-mode behavior: dropout
+        is a training-time regularizer, not a prediction-time mechanism,
+        so validation reports the interpolated-CE the model would see at
+        full confidence trust. The updated history is **discarded** —
+        validation must never mutate the training-side EMA state.
 
     Returns
     -------
@@ -353,6 +365,31 @@ def validate(
                     out.reconstruction, x, batch_dim=0
                 )
             kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
+
+            # Confidence-active validation: replace standard CE with
+            # Eq. 2 interpolated CE, with confidence_dropout=1.0 to
+            # disable random masking (eval-mode parallel to nn.Dropout).
+            # Updated history is intentionally discarded — validation
+            # must not mutate training state.
+            if confidence_history is not None and (
+                out.trial_confidence is not None or out.task_confidence is not None
+            ):
+                cb_val = apply_confidence_routing(
+                    y=logits[0], target=logits[0].detach(),
+                    trial_confidence=out.trial_confidence,
+                    task_confidence=out.task_confidence,
+                    history=confidence_history,
+                    batch_fraction=1.0,
+                    confidence_dropout=1.0,  # eval-mode: no masking
+                    compute_interpolation=False,
+                    loss_type="L1",
+                )
+                if cb_val.total_dropped is not None:
+                    cls_loss = interpolated_multi_head_cross_entropy(
+                        logits, targets, cb_val.total_dropped,
+                        class_weights_per_dim=class_weights_per_dim,
+                    )
+
             total_loss, _ = aggregate_total_loss(
                 classification_loss=cls_loss,
                 reconstruction_loss=recon_loss,

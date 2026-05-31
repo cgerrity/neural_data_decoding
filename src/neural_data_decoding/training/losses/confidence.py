@@ -184,8 +184,8 @@ class ConfidenceLossBreakdown:
         single-dim cases) or uses :attr:`total_dropped` to compute its
         own per-dim interpolated CE.
     total_loss, trial_loss, task_loss
-        The three branch losses (scalar). Sum these (or weight them) when
-        assembling the multi-objective total.
+        The three per-stream confidence losses (scalar). Sum these (or
+        weight them) when assembling the multi-objective total.
     updated_history
         Fresh :class:`ConfidenceHistory` with the EMA-updated values, all
         detached. The caller persists this for the next minibatch.
@@ -320,11 +320,11 @@ def _compute_confidence_stream_loss(
 
     if want_dataset_confidence and want_batch_correction:
         # Eq. 10: explicit gradient correction scales by 1/γ.
-        branch_loss = raw_loss / batch_fraction
+        stream_loss = raw_loss / batch_fraction
     else:
-        branch_loss = raw_loss
+        stream_loss = raw_loss
 
-    return branch_loss, updated.detach()
+    return stream_loss, updated.detach()
 
 
 def apply_confidence_routing(
@@ -364,10 +364,10 @@ def apply_confidence_routing(
     trial_confidence
         Per-trial confidence sequence, shape ``(B, T, 1)`` — typically the
         sigmoid output of the Trial confidence head. ``None`` disables
-        the Trial branch entirely.
+        the Trial stream entirely.
     task_confidence
         Per-class confidence sequence, shape ``(B, T, K)`` — typically the
-        Task confidence head. ``None`` disables the Task branch.
+        Task confidence head. ``None`` disables the Task stream.
     history
         :class:`ConfidenceHistory` carrying the current EMA state. NOT
         modified in place; the new state is returned in the breakdown.
@@ -378,13 +378,13 @@ def apply_confidence_routing(
         Probability threshold for the dropout mask (subtlety #2). Default
         ``0.5`` matches MATLAB.
     want_dataset_confidence
-        When ``True`` (default), each branch loss uses the EMA-updated
+        When ``True`` (default), each per-stream loss uses the EMA-updated
         confidence. When ``False``, the batch mean is used directly (no
         EMA).
     want_batch_correction
-        When ``True``, scales each branch loss by ``1/γ`` (Eq. 10).
+        When ``True``, scales each per-stream loss by ``1/γ`` (Eq. 10).
     loss_type
-        Per-branch loss kernel — ``"L1"`` (default — MATLAB default-ish),
+        Per-stream loss kernel — ``"L1"`` (default — MATLAB default-ish),
         ``"L2"``, ``"L1 & L2"``, or ``"CrossEntropy"``.
     time_dim
         Axis of ``y`` / ``target`` / confidences treated as time. Default
@@ -427,13 +427,13 @@ def apply_confidence_routing(
     Returns
     -------
     ConfidenceLossBreakdown
-        ``y_interpolated`` (Eq. 2), three branch losses, and the updated
-        history (detached). Caller persists the history for the next
-        minibatch.
+        ``y_interpolated`` (Eq. 2), three per-stream losses, and the
+        updated history (detached). Caller persists the history for the
+        next minibatch.
     """
     zero = torch.zeros((), dtype=y.dtype, device=y.device)
 
-    # ── Task branch (subtleties #1, #2) ───────────────────────────────────
+    # ── Task stream (subtleties #1, #2) ───────────────────────────────────
     task_undropped: Optional[torch.Tensor] = None
     task_dropped: Optional[torch.Tensor] = None
     if task_confidence is not None:
@@ -443,7 +443,7 @@ def apply_confidence_routing(
             mask=explicit_task_dropout_mask, generator=generator,
         )
 
-    # ── Trial branch + conjunction (Eq. 1) ────────────────────────────────
+    # ── Trial stream + conjunction (Eq. 1) ────────────────────────────────
     trial_undropped: Optional[torch.Tensor] = None
     trial_dropped: Optional[torch.Tensor] = None
     total_undropped: Optional[torch.Tensor] = task_undropped  # init: Task-only
