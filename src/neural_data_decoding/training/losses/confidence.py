@@ -263,7 +263,7 @@ def _apply_confidence_dropout(
     return torch.where(mask, torch.ones_like(confidence), confidence)
 
 
-def _branch_loss(
+def _compute_confidence_stream_loss(
     batch_instances: torch.Tensor,
     historical: torch.Tensor,
     *,
@@ -272,15 +272,20 @@ def _branch_loss(
     want_batch_correction: bool,
     loss_type: LossType,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute one confidence branch's loss and the new EMA value.
+    """Compute one confidence stream's loss and the new EMA value.
 
-    Mirrors MATLAB's local ``compute_confidence_branch`` (lines 86-162).
-    The branch is one of {Total, Trial, Task}; this function is called
-    once per branch with the corresponding batch tensor and history.
+    A "stream" is one of {Total, Trial, Task}: the three confidence
+    quantities the kernel tracks in parallel. (Renamed from "branch" to
+    avoid collision with "classification branch" — the per-output-dim
+    classifier heads.)
+
+    Mirrors MATLAB's local helper ``compute_confidence_branch`` in
+    ``cgg_lossConfidence.m`` (lines 86-162). Called once per stream with
+    the corresponding batch tensor and history.
 
     Returns
     -------
-    branch_loss : torch.Tensor
+    stream_loss : torch.Tensor
         Scalar loss. With batch correction enabled, scaled by ``1/γ``.
     updated_history : torch.Tensor
         Detached scalar — the new EMA value to persist for the next
@@ -336,6 +341,7 @@ def apply_confidence_routing(
     loss_type: LossType = "L1",
     time_dim: int = 1,
     compute_interpolation: bool = True,
+    symmetric_dropout: bool = False,
     explicit_trial_dropout_mask: Optional[torch.Tensor] = None,
     explicit_task_dropout_mask: Optional[torch.Tensor] = None,
     generator: Optional[torch.Generator] = None,
@@ -392,6 +398,24 @@ def apply_confidence_routing(
         don't share a last-axis size (e.g. per-dim classification logits
         vs ``(B, T, num_dims)`` task confidence) — otherwise the
         interpolation's broadcasting would silently misalign.
+    symmetric_dropout
+        Controls whether the per-stream confidence losses (Trial, Task,
+        Total) see the **dropped** or **undropped** confidence values.
+
+        * ``False`` (default — MATLAB parity): per-stream losses use
+          UNDROPPED confidence (matches ``cgg_lossConfidence.m`` lines
+          78-80 which pass ``TrialConfidence`` / ``TaskConfidence`` /
+          ``TotalConfidence`` — never the ``_Dropped`` variants — to
+          ``compute_confidence_branch``). The Eq. 2 interpolation
+          continues to use DROPPED (anti-degenerate regularizer).
+          Asymmetric.
+        * ``True`` (ablation): per-stream losses also use DROPPED. The
+          same mask drives both the budget regularizer and the
+          prediction interpolation. Symmetric. Note: the Beta
+          P-controller still uses UNDROPPED regardless — Beta's job is
+          to track the true confidence distribution, which dropout
+          would distort. This flag has no published research backing
+          known to the author; it's exposed for ablation experiments.
     explicit_trial_dropout_mask, explicit_task_dropout_mask
         Optional boolean masks (same shape as the last-timestep
         confidence). For deterministic testing of subtlety #2 without
@@ -421,6 +445,7 @@ def apply_confidence_routing(
 
     # ── Trial branch + conjunction (Eq. 1) ────────────────────────────────
     trial_undropped: Optional[torch.Tensor] = None
+    trial_dropped: Optional[torch.Tensor] = None
     total_undropped: Optional[torch.Tensor] = task_undropped  # init: Task-only
     total_dropped: Optional[torch.Tensor] = task_dropped
     if trial_confidence is not None:
@@ -476,17 +501,25 @@ def apply_confidence_routing(
     else:
         y_interpolated = y
 
-    # ── Branch losses (subtleties #4, #5; plus Eq. 10 correction) ────────
-    total_loss, new_total = _branch_loss(
-        total_undropped, history.total,
+    # ── Per-stream confidence losses (subtleties #4, #5; plus Eq. 10 correction) ────────
+    # MATLAB-parity default: each stream's loss uses the UNDROPPED batch
+    # values. ``symmetric_dropout=True`` switches to DROPPED for ablation.
+    total_for_stream = total_dropped if symmetric_dropout else total_undropped
+    total_loss, new_total = _compute_confidence_stream_loss(
+        total_for_stream, history.total,
         batch_fraction=batch_fraction,
         want_dataset_confidence=want_dataset_confidence,
         want_batch_correction=want_batch_correction,
         loss_type=loss_type,
     )
     if trial_undropped is not None:
-        trial_loss, new_trial = _branch_loss(
-            trial_undropped, history.trial,
+        # trial_dropped and trial_undropped are built together inside the
+        # same `if trial_confidence is not None` block — the assert narrows
+        # the type for pyright (which doesn't track the correlation).
+        assert trial_dropped is not None
+        trial_for_stream = trial_dropped if symmetric_dropout else trial_undropped
+        trial_loss, new_trial = _compute_confidence_stream_loss(
+            trial_for_stream, history.trial,
             batch_fraction=batch_fraction,
             want_dataset_confidence=want_dataset_confidence,
             want_batch_correction=want_batch_correction,
@@ -495,8 +528,10 @@ def apply_confidence_routing(
     else:
         trial_loss, new_trial = zero, history.trial
     if task_undropped is not None:
-        task_loss, new_task = _branch_loss(
-            task_undropped, history.task,
+        assert task_dropped is not None  # paired construction (see above)
+        task_for_stream = task_dropped if symmetric_dropout else task_undropped
+        task_loss, new_task = _compute_confidence_stream_loss(
+            task_for_stream, history.task,
             batch_fraction=batch_fraction,
             want_dataset_confidence=want_dataset_confidence,
             want_batch_correction=want_batch_correction,

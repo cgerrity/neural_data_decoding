@@ -17,6 +17,7 @@ Plus shape / interface tests for the kernel as a whole.
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from neural_data_decoding.training.losses.confidence import (
@@ -190,3 +191,103 @@ def test_task_only_skips_conjunction() -> None:
     # Total = Task (no Trial to conjunct with) → trial_loss = 0.
     assert float(out.trial_loss) == 0.0
     assert float(out.task_loss) > 0.0
+
+
+# ───────────────────────── symmetric_dropout flag (Milestone C #7c) ─────────────────────────
+
+
+def test_symmetric_dropout_false_matches_undropped_stream_inputs() -> None:
+    """Default (asymmetric) per-stream losses depend only on undropped values.
+
+    Setup: identical trial/task tensors, two confidence_dropout values.
+    With symmetric_dropout=False, the per-stream losses must match between
+    the two runs because they consume the undropped batch directly.
+    """
+    torch.manual_seed(0)
+    trial = torch.full((2, 3, 1), 0.5, dtype=torch.float64)
+    task  = torch.full((2, 3, 4), 0.5, dtype=torch.float64)
+    y     = torch.zeros((2, 3, 4), dtype=torch.float64)
+
+    out_p0 = apply_confidence_routing(
+        y, y, trial, task,
+        history=ConfidenceHistory.initial(dtype=torch.float64),
+        batch_fraction=0.5,
+        confidence_dropout=0.0,        # every entry reset to 1 (dropout maximal)
+        symmetric_dropout=False,
+    )
+    out_p1 = apply_confidence_routing(
+        y, y, trial, task,
+        history=ConfidenceHistory.initial(dtype=torch.float64),
+        batch_fraction=0.5,
+        confidence_dropout=1.0,        # no entries reset (dropout disabled)
+        symmetric_dropout=False,
+    )
+    # Per-stream losses should match between the two runs — they consume
+    # only undropped values (independent of confidence_dropout).
+    assert float(out_p0.total_loss) == pytest.approx(float(out_p1.total_loss), abs=1e-12)
+    assert float(out_p0.trial_loss) == pytest.approx(float(out_p1.trial_loss), abs=1e-12)
+    assert float(out_p0.task_loss)  == pytest.approx(float(out_p1.task_loss),  abs=1e-12)
+
+
+def test_symmetric_dropout_true_makes_stream_losses_depend_on_dropout() -> None:
+    """symmetric_dropout=True routes the dropped tensor into the stream losses.
+
+    With confidence_dropout=0 (every entry reset to 1), the dropped tensor
+    becomes all-1 → batch_mean=1.0 → distance-to-target-1 = 0 → loss = 0.
+    With confidence_dropout=1 (nothing reset), the dropped tensor equals
+    the undropped one (here all 0.5) → loss > 0.
+    """
+    torch.manual_seed(0)
+    trial = torch.full((2, 3, 1), 0.5, dtype=torch.float64)
+    task  = torch.full((2, 3, 4), 0.5, dtype=torch.float64)
+    y     = torch.zeros((2, 3, 4), dtype=torch.float64)
+
+    out_dropped_all = apply_confidence_routing(
+        y, y, trial, task,
+        history=ConfidenceHistory.initial(dtype=torch.float64),
+        batch_fraction=0.5,
+        confidence_dropout=0.0,
+        symmetric_dropout=True,
+    )
+    out_dropped_none = apply_confidence_routing(
+        y, y, trial, task,
+        history=ConfidenceHistory.initial(dtype=torch.float64),
+        batch_fraction=0.5,
+        confidence_dropout=1.0,
+        symmetric_dropout=True,
+    )
+    # All entries reset to 1 → batch mean is 1 → 0 distance to target → 0 loss.
+    assert float(out_dropped_all.trial_loss) == pytest.approx(0.0, abs=1e-12)
+    # No entries reset → undropped values flow through → nonzero loss.
+    assert float(out_dropped_none.trial_loss) > 0
+
+
+def test_symmetric_dropout_does_not_affect_beta() -> None:
+    """Beta P-controller uses undropped TotalConfidence regardless of the flag.
+
+    Pinned to prevent accidental scope creep: the flag must only affect
+    per-stream confidence losses, not the Beta computation.
+    """
+    torch.manual_seed(0)
+    trial = torch.full((2, 3, 1), 0.5, dtype=torch.float64)
+    task  = torch.full((2, 3, 4), 0.5, dtype=torch.float64)
+    y     = torch.zeros((2, 3, 4), dtype=torch.float64)
+
+    out_asymmetric = apply_confidence_routing(
+        y, y, trial, task,
+        history=ConfidenceHistory.initial(dtype=torch.float64),
+        batch_fraction=0.5,
+        confidence_dropout=0.5,
+        symmetric_dropout=False,
+    )
+    out_symmetric = apply_confidence_routing(
+        y, y, trial, task,
+        history=ConfidenceHistory.initial(dtype=torch.float64),
+        batch_fraction=0.5,
+        confidence_dropout=0.5,
+        symmetric_dropout=True,
+    )
+    # Same Beta because the controller never reads the dropped tensor.
+    assert float(out_asymmetric.updated_history.beta) == pytest.approx(
+        float(out_symmetric.updated_history.beta), abs=1e-12,
+    )
