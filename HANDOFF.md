@@ -231,6 +231,17 @@ Milestone C status — what's done
   curriculum then takes over, final val_acc 0.438 beats the C #5
   single-stage 0.427).
 
+## Open concerns (flagged for later)
+
+- **`confidence_history` threading — possible issue (flagged 2026-05-31).**
+  User raised an uncertainty about whether `confidence_history` is wired
+  correctly through the training/validation path (no specific bug
+  identified yet). To investigate next time we revisit confidence: walk
+  through `fit_supervised` → `train_one_epoch` → `apply_confidence_routing`
+  → `validate` paths together, verify the history object's identity /
+  mutation / propagation pattern across iterations, and pin behavior
+  with explicit tests if anything looks off.
+
 ## Next up — Milestone C polish / cleanup, then CC or D
 
 Milestone C's *active production path* is now end-to-end runnable
