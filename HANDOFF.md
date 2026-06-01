@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **470 passed, 4 deselected** by default; **4 passed** under
+Expected: **491 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -83,7 +83,7 @@ neural_data_decoding/
 | 0 — Foundation | ✅ Complete | Stratification: element-for-element MATLAB |
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
-| C — Full Optimal VAE | 🚧 **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL forward complete**; accumulation table still pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical |
+| C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
 | CC — Extra-credit features | ⏳ Pending |  |
 | D — Cluster deployment | ⏳ Pending |  |
 
@@ -148,6 +148,24 @@ Milestone C status — what's done
   shows augmentation, weights, and freeze ticking as expected and
   the train loss collapsing right when the classifier unfreezes
   at epoch 11.
+- **Hardware-aware gradient accumulation** (Milestone C #9) — port of
+  MATLAB's `cgg_procGradientAggregation.m` +
+  `cgg_getAccumulationSizeForCurrentSystem.m`. New
+  `training/accumulation.py` module: `micro_batch_chunks(n_total,
+  max_size)` yields `(start, end, weight)` triples partitioning the
+  mini-batch; `get_accumulation_size_for_current_system(cfg.accumulation_information)`
+  detects current device(s) via `torch.cuda.get_device_name` (or "CPU"),
+  looks up the matching entry, returns the min across detected GPUs.
+  `train_one_epoch` gains an `accumulation_max_size` parameter; when set,
+  the inner loop runs forward+backward per micro-batch (loss scaled by
+  `micro_size/mini_size`), accumulates gradients in `.grad`, then one
+  `optimizer.step()` per mini-batch. When `None` or `>= mini_batch_size`,
+  fast-path yields a single chunk (identical to non-accumulation). CLI
+  resolves accumulation_max_size from `cfg.accumulation_information`
+  (supports both dict form and OmegaConf list-of-dicts form). Gradient
+  parity verified by test: full-batch vs 4-chunk accumulation produces
+  gradients matching to ~1e-6. Step-count invariant pinned: 4 micro-
+  batches → 1 optimizer step.
 - **`confidence_history` cleanup** (resolved 2026-06-01) — Investigated
   the user-flagged concern. Traced the chain `fit_supervised` →
   `train_one_epoch` → `apply_confidence_routing` → `validate`. Verified
@@ -297,7 +315,7 @@ optimizer step when the device's `MaxBatchSize` is smaller than
 `MiniBatchSize`. Implement gradient accumulation that respects the
 hardware table.
 
-### Option B — start Milestone CC (extra-credit features) or D (cluster deployment)
+### (no other options — pick CC or D)
 
 If the deferred Milestone C items aren't blocking real-data runs, jump
 ahead to:

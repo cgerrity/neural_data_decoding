@@ -144,6 +144,7 @@ def fit_supervised(
     rescale_loss_epoch: int = 0,
     confidence_history: Optional["ConfidenceHistory"] = None,
     mil_mode: bool = False,
+    accumulation_max_size: Optional[int] = None,
 ) -> list[EpochHistory]:
     """Run the supervised Stage 2 fit loop end-to-end.
 
@@ -262,6 +263,7 @@ def fit_supervised(
             update_priors_strategy=strategy,
             confidence_history=confidence_history,
             mil_mode=mil_mode,
+            accumulation_max_size=accumulation_max_size,
         )
         iteration += train_metrics.num_iterations
 

@@ -43,6 +43,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from neural_data_decoding.models.composite import AutoencoderOutput, VariationalOutput
+from neural_data_decoding.training.accumulation import micro_batch_chunks
 from neural_data_decoding.training.losses.classification import (
     interpolated_multi_head_cross_entropy,
     mil_multi_head_cross_entropy,
@@ -105,6 +106,7 @@ def train_one_epoch(
     update_priors_strategy: Optional[Literal["every_iter", "first_iter_only", "never"]] = None,
     confidence_history: Optional[ConfidenceHistory] = None,
     mil_mode: bool = False,
+    accumulation_max_size: Optional[int] = None,
 ) -> tuple[EpochMetrics, Optional[LossPriors], Optional[ConfidenceHistory]]:
     """Run one supervised training epoch — Milestone A classifier path.
 
@@ -174,6 +176,16 @@ def train_one_epoch(
         → NLL on the marginal. Combines correctly with confidence
         interpolation when both are active. Driven by
         ``cfg.multiple_instance_learning_type == "MIL"`` at the CLI layer.
+    accumulation_max_size
+        Max micro-batch size for hardware-aware gradient accumulation
+        (Critical Note #18 / Milestone C #9). When ``None`` or
+        ``>= mini_batch_size``, behavior is identical to no
+        accumulation. When smaller, each mini-batch is split into
+        micro-batches of this size; per-micro-batch loss is scaled by
+        ``micro_size / mini_size`` before ``backward()``; one
+        ``optimizer.step()`` per mini-batch. Resolved by
+        :func:`~neural_data_decoding.training.accumulation.get_accumulation_size_for_current_system`
+        from ``cfg.accumulation_information`` at the CLI layer.
 
     Returns
     -------
@@ -204,110 +216,120 @@ def train_one_epoch(
         batch_size = int(x.shape[0])
 
         optimizer.zero_grad(set_to_none=True)
-        out = model(x)
 
-        # Detect variational composite vs classifier-only output.
-        if isinstance(out, VariationalOutput):
-            logits = out.logits
-            # Initial classification loss: standard CE on logits, MIL CE
-            # on marginal probs, or interpolated variants (set below when
-            # confidence is active).
-            if mil_mode:
-                cls_loss = mil_multi_head_cross_entropy(
-                    logits, targets, class_weights_per_dim=class_weights_per_dim,
-                )
-            else:
-                cls_loss = multi_head_cross_entropy(
-                    logits, targets, class_weights_per_dim=class_weights_per_dim,
-                )
-            recon_loss: Optional[torch.Tensor] = None
-            kl_loss: Optional[torch.Tensor] = None
-            if out.reconstruction is not None:
-                recon_loss = masked_mse_reconstruction_loss(
-                    out.reconstruction, x, batch_dim=0
-                )
-            kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
+        # Micro-batch accumulation: when accumulation_max_size < batch_size,
+        # split the mini-batch into chunks; backward each chunk's scaled
+        # loss into .grad; step once at the end. When None or >= batch_size
+        # (the fast path), micro_batch_chunks yields a single (0,
+        # batch_size, 1.0) tuple — identical to non-accumulation behavior.
+        weighted_total_loss = 0.0
+        weighted_cls_loss = 0.0
+        weighted_accuracy = 0.0
+        for chunk_start, chunk_end, chunk_weight in micro_batch_chunks(
+            batch_size, accumulation_max_size,
+        ):
+            micro_x = x[chunk_start:chunk_end]
+            micro_targets = targets[chunk_start:chunk_end]
 
-            # Confidence (Milestone C #7 + #7b + #8): if the model produces
-            # trial or task confidence AND the caller threaded a
-            # ConfidenceHistory state, advance the Beta P-controller,
-            # EMAs, and per-stream losses. The summed stream losses
-            # become the confidence component; Beta scales it inside the
-            # prior normalizer. The dropped per-dim total confidence
-            # additionally drives interpolated CE on the classification
-            # loss — MIL or standard depending on mil_mode.
-            confidence_loss: Optional[torch.Tensor] = None
-            confidence_beta_scalar: float = 1.0
-            if confidence_history is not None and (
-                out.trial_confidence is not None or out.task_confidence is not None
-            ):
-                cb = apply_confidence_routing(
-                    y=logits[0], target=logits[0].detach(),  # ignored: see below
-                    trial_confidence=out.trial_confidence,
-                    task_confidence=out.task_confidence,
-                    history=confidence_history,
-                    batch_fraction=1.0,
-                    compute_interpolation=False,
-                    loss_type="L1",
-                )
-                confidence_loss = cb.total_loss + cb.trial_loss + cb.task_loss
-                confidence_beta_scalar = float(cb.updated_history.beta)
-                confidence_history = cb.updated_history
+            out = model(micro_x)
 
-                # Interpolated CE (Eq. 2). Same kernel handles both MIL
-                # and non-MIL paths via the mil= flag — MIL applies the
-                # joint softmax + aggregation first, then interpolates
-                # on the marginal probs; non-MIL interpolates per-timestep.
-                if cb.total_dropped is not None:
-                    cls_loss = interpolated_multi_head_cross_entropy(
-                        logits, targets, cb.total_dropped,
-                        class_weights_per_dim=class_weights_per_dim,
-                        mil=mil_mode,
+            # Detect variational composite vs classifier-only output.
+            if isinstance(out, VariationalOutput):
+                logits = out.logits
+                if mil_mode:
+                    cls_loss = mil_multi_head_cross_entropy(
+                        logits, micro_targets, class_weights_per_dim=class_weights_per_dim,
                     )
+                else:
+                    cls_loss = multi_head_cross_entropy(
+                        logits, micro_targets, class_weights_per_dim=class_weights_per_dim,
+                    )
+                recon_loss: Optional[torch.Tensor] = None
+                kl_loss: Optional[torch.Tensor] = None
+                if out.reconstruction is not None:
+                    recon_loss = masked_mse_reconstruction_loss(
+                        out.reconstruction, micro_x, batch_dim=0,
+                    )
+                kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
 
-            if loss_priors is not None:
-                breakdown = aggregate_normalized_losses(
-                    reconstruction_loss=recon_loss,
-                    kl_loss=kl_loss,
-                    classification_loss=cls_loss,
-                    confidence_loss=confidence_loss,
-                    weights=loss_weights,
-                    priors=loss_priors,
-                    prior_proportion=prior_proportion,
-                    update_priors=update_priors_this_iter,
-                    confidence_beta=confidence_beta_scalar,
-                )
-                total_loss = breakdown.total
-                loss_priors = breakdown.updated_priors
+                # Confidence routing — per-micro-batch (matches MATLAB
+                # cgg_procGradientAggregation which calls cgg_lossComponents
+                # per micro-batch; LossInformation EMA + Beta advance per
+                # micro-batch).
+                confidence_loss: Optional[torch.Tensor] = None
+                confidence_beta_scalar: float = 1.0
+                if confidence_history is not None and (
+                    out.trial_confidence is not None or out.task_confidence is not None
+                ):
+                    cb = apply_confidence_routing(
+                        y=logits[0], target=logits[0].detach(),
+                        trial_confidence=out.trial_confidence,
+                        task_confidence=out.task_confidence,
+                        history=confidence_history,
+                        batch_fraction=1.0,
+                        compute_interpolation=False,
+                        loss_type="L1",
+                    )
+                    confidence_loss = cb.total_loss + cb.trial_loss + cb.task_loss
+                    confidence_beta_scalar = float(cb.updated_history.beta)
+                    confidence_history = cb.updated_history
+                    if cb.total_dropped is not None:
+                        cls_loss = interpolated_multi_head_cross_entropy(
+                            logits, micro_targets, cb.total_dropped,
+                            class_weights_per_dim=class_weights_per_dim,
+                            mil=mil_mode,
+                        )
+
+                if loss_priors is not None:
+                    breakdown = aggregate_normalized_losses(
+                        reconstruction_loss=recon_loss,
+                        kl_loss=kl_loss,
+                        classification_loss=cls_loss,
+                        confidence_loss=confidence_loss,
+                        weights=loss_weights,
+                        priors=loss_priors,
+                        prior_proportion=prior_proportion,
+                        update_priors=update_priors_this_iter,
+                        confidence_beta=confidence_beta_scalar,
+                    )
+                    total_loss = breakdown.total
+                    loss_priors = breakdown.updated_priors
+                else:
+                    total_loss, _ = aggregate_total_loss(
+                        classification_loss=cls_loss,
+                        reconstruction_loss=recon_loss,
+                        kl_loss=kl_loss,
+                        confidence_loss=confidence_loss,
+                        weights=loss_weights,
+                    )
             else:
-                # No EMA priors → simple weighted sum (Milestone C without
-                # the full orchestrator wired in yet).
-                total_loss, _ = aggregate_total_loss(
-                    classification_loss=cls_loss,
-                    reconstruction_loss=recon_loss,
-                    kl_loss=kl_loss,
-                    confidence_loss=confidence_loss,
-                    weights=loss_weights,
+                # Milestone A/B: model(x) returns list[Tensor] of logits.
+                logits = out
+                cls_loss = multi_head_cross_entropy(
+                    logits, micro_targets, class_weights_per_dim=class_weights_per_dim,
                 )
-        else:
-            # Milestone A/B: model(x) returns list[Tensor] of logits.
-            logits = out
-            cls_loss = multi_head_cross_entropy(
-                logits, targets, class_weights_per_dim=class_weights_per_dim
-            )
-            total_loss, _ = aggregate_total_loss(
-                classification_loss=cls_loss, weights=loss_weights
-            )
+                total_loss, _ = aggregate_total_loss(
+                    classification_loss=cls_loss, weights=loss_weights,
+                )
 
-        total_loss.backward()
+            # Scale by chunk weight (micro_size / mini_size) so the
+            # accumulated gradient equals the equivalent full-batch
+            # gradient. Backward into .grad without stepping.
+            (total_loss * chunk_weight).backward()
+
+            # Weighted metric accumulation across chunks → mini-batch totals.
+            weighted_total_loss += float(total_loss.item()) * chunk_weight
+            weighted_cls_loss += float(cls_loss.item()) * chunk_weight
+            weighted_accuracy += _per_dim_accuracy(logits, micro_targets) * chunk_weight
+
         if grad_clip_norm is not None:
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
         optimizer.step()
 
         sums.update(
-            total_loss=total_loss.item(),
-            classification_loss=cls_loss.item(),
-            accuracy=_per_dim_accuracy(logits, targets),
+            total_loss=weighted_total_loss,
+            classification_loss=weighted_cls_loss,
+            accuracy=weighted_accuracy,
             batch_size=batch_size,
         )
 

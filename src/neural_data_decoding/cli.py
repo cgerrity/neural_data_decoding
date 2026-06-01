@@ -47,6 +47,7 @@ from .models.composite import (
     build_variational_composite,
 )
 from .models.registry import build_classifier, build_encoder
+from .training.accumulation import get_accumulation_size_for_current_system
 from .training.checkpoint import has_existing_checkpoint
 from .training.freezing import build_optimizer_with_module_groups
 from .training.lifecycle import EpochHistory, fit_supervised, fit_two_stage
@@ -247,6 +248,28 @@ def _cmd_train(args: argparse.Namespace) -> int:
         is_variational
         and str(cfg.get("multiple_instance_learning_type", "None")) == "MIL"
     )
+
+    # Hardware-aware gradient accumulation (Critical Note #18). Reads
+    # cfg.accumulation_information as a {system_name: max_micro_batch}
+    # mapping; resolves to the current device's entry. None falls back to
+    # no accumulation (single-pass per mini-batch).
+    accum_info_raw = cfg.get("accumulation_information", None)
+    accumulation_max_size: Optional[int] = None
+    if accum_info_raw is not None:
+        accum_info: dict[str, int]
+        if isinstance(accum_info_raw, list):
+            # OmegaConf list-of-dicts form (one item per entry).
+            accum_info = {
+                str(item.get("SystemName") or item.get("system_name", "")): int(
+                    item.get("MaxBatchSize") or item.get("max_batch_size", 0),
+                )
+                for item in accum_info_raw
+            }
+            accum_info = {k: v for k, v in accum_info.items() if k and v > 0}
+        else:
+            # Dict form.
+            accum_info = {str(k): int(v) for k, v in dict(accum_info_raw).items()}
+        accumulation_max_size = get_accumulation_size_for_current_system(accum_info)
     initial_confidence_history: Optional["ConfidenceHistory"] = None
     if is_variational:
         loss_weights_dict: dict[str, float] = {
@@ -323,6 +346,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
             rescale_loss_epoch=int(cfg.get("rescale_loss_epoch", 0)),
             confidence_history=initial_confidence_history,
             mil_mode=mil_mode,
+            accumulation_max_size=accumulation_max_size,
         )
 
     final_val_acc = history[-1].val.accuracy if history and history[-1].val else None
