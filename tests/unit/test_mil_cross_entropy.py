@@ -178,3 +178,66 @@ def test_interpolated_ce_mil_differs_from_non_mil() -> None:
         logits, targets, total_dropped, mil=False,
     )
     assert float(mil_path) != pytest.approx(float(standard_path), abs=1e-5)
+
+
+# ───────────────────────── aggregate_classifier_predictions ─────────────────────────
+
+
+def test_aggregate_non_mil_matches_mean_of_per_timestep_softmax() -> None:
+    """Non-MIL aggregate = mean of per-timestep softmax (uniform-prior aggregation)."""
+    torch.manual_seed(0)
+    logits = torch.randn(3, 7, 4)               # (B=3, T=7, K=4)
+    aggregated = aggregate_from_helper([logits], mil_mode=False)
+    expected = torch.softmax(logits, dim=-1).mean(dim=1)  # uniform prior over T
+    torch.testing.assert_close(aggregated[0], expected, rtol=1e-6, atol=1e-6)
+
+
+def test_aggregate_mil_matches_marginal() -> None:
+    """MIL aggregate = joint-softmax marginal over T (already a valid distribution)."""
+    from neural_data_decoding.training.losses.classification import _mil_marginal_probs
+    torch.manual_seed(0)
+    logits = torch.randn(3, 5, 4)
+    aggregated = aggregate_from_helper([logits], mil_mode=True)
+    expected = _mil_marginal_probs(logits)
+    torch.testing.assert_close(aggregated[0], expected, rtol=1e-6, atol=1e-6)
+
+
+def test_aggregate_rows_sum_to_one_per_trial() -> None:
+    """Both modes produce per-trial distributions that sum to 1 over K."""
+    torch.manual_seed(0)
+    logits = torch.randn(4, 6, 3)
+    for mil_mode in (False, True):
+        aggregated = aggregate_from_helper([logits], mil_mode=mil_mode)
+        torch.testing.assert_close(
+            aggregated[0].sum(dim=-1), torch.ones(4),
+            rtol=1e-6, atol=1e-6,
+        )
+
+
+def test_aggregate_supports_multiple_dims() -> None:
+    """Multi-head: one aggregated distribution per output dim, correct shapes."""
+    torch.manual_seed(0)
+    logits = [torch.randn(2, 5, 3), torch.randn(2, 5, 7)]
+    aggregated = aggregate_from_helper(logits, mil_mode=False)
+    assert len(aggregated) == 2
+    assert aggregated[0].shape == (2, 3)
+    assert aggregated[1].shape == (2, 7)
+
+
+def test_aggregate_rejects_2d_logits() -> None:
+    """Aggregation requires a time axis."""
+    with pytest.raises(ValueError, match="requires.*time"):
+        aggregate_from_helper([torch.zeros(2, 5)], mil_mode=False)
+
+
+def test_aggregate_rejects_empty_list() -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        aggregate_from_helper([], mil_mode=False)
+
+
+def aggregate_from_helper(logits, *, mil_mode):
+    """Tiny wrapper so the test functions read cleanly."""
+    from neural_data_decoding.training.losses.classification import (
+        aggregate_classifier_predictions,
+    )
+    return aggregate_classifier_predictions(logits, mil_mode=mil_mode)

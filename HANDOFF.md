@@ -148,6 +148,18 @@ Milestone C status — what's done
   shows augmentation, weights, and freeze ticking as expected and
   the train loss collapsing right when the classifier unfreezes
   at epoch 11.
+- **Aggregate prediction column in CM_Table** (Milestone C #8b) — port
+  of the `Aggregation_Prediction` column that MATLAB writes regardless
+  of MIL mode (`cgg_getPredictionFromClassifierProbabilities.m` lines
+  163, 189; `cgg_getClassifierOutputsFromProbabilities.m` lines 188-193).
+  New `aggregate_classifier_predictions(logits_per_dim, *, mil_mode)`
+  helper in `losses/classification.py`. Same formula for both modes —
+  sum across T then normalize each row to sum to 1: in non-MIL this
+  averages per-timestep softmax (uniform prior over which timestep
+  "wins"); in MIL it marginalizes the joint softmax over T (the
+  normalization is a no-op there). `_write_cm_table_for_split` now
+  threads `mil_mode` and writes the `aggregation_prediction` field to
+  the .mat file alongside the window prediction (last-timestep argmax).
 - **MIL softmax pooling in variational forward path** (Milestone C #8) —
   the kernel (`MILSoftmaxLayer`) was already 1e-6 parity-verified in
   C #4; this milestone wired it into the loss orchestrator. New

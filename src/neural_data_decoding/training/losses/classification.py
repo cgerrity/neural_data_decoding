@@ -425,7 +425,83 @@ def interpolated_multi_head_cross_entropy(
     return total
 
 
+def aggregate_classifier_predictions(
+    logits_per_dim: Sequence[torch.Tensor],
+    *,
+    mil_mode: bool = False,
+    eps: float = 1e-12,
+) -> list[torch.Tensor]:
+    """Per-trial normalized aggregate class probabilities for each output dim.
+
+    Mirrors the MATLAB chain in
+    ``cgg_getPredictionFromClassifierProbabilities.m`` lines 163 + 189
+    (computed regardless of ``MultipleInstanceLearningType``):
+
+    .. code-block:: matlab
+
+        Confidence_Aggregation = sum(this_Y, [S, T])
+        Confidence_Aggregation = Confidence_Aggregation ./ ...
+            sum(Confidence_Aggregation, [S, C, T])    % normalize so rows sum to 1
+
+    Two cases — same formula, different intermediate semantics:
+
+    * **Non-MIL** (``mil_mode=False``): each timestep's softmax already
+      sums to 1 over K. Summing across T gives ``(B, K)`` with each row
+      summing to ``T``. Dividing by ``T`` (the row sum) yields a valid
+      probability distribution — mathematically equivalent to taking the
+      MEAN of per-timestep softmax (a uniform prior over which timestep
+      "wins").
+    * **MIL** (``mil_mode=True``): the joint softmax sums to 1 over
+      ``(T, K)``. Summing across T gives the marginal over K, which
+      already sums to 1. The normalization is a no-op (div-by-1).
+
+    Parameters
+    ----------
+    logits_per_dim
+        Per-dim logits, each ``(B, T, K_d)``. T must be present.
+    mil_mode
+        Selects between per-timestep softmax (``False``) and joint
+        softmax over (T, K) (``True``).
+    eps
+        Lower clamp on the row sum before division (guards against
+        accidental zero rows; non-MIL with non-degenerate logits never
+        hits this, MIL is already always-1 by construction).
+
+    Returns
+    -------
+    list of torch.Tensor
+        One ``(B, K_d)`` tensor per output dim. Each row sums to 1.
+        ``argmax(dim=-1)`` over each tensor gives the per-trial
+        predicted class for that dim — suitable for the
+        ``Aggregation_Prediction`` column of ``CM_Table``.
+
+    Raises
+    ------
+    ValueError
+        If any logits tensor isn't 3-D (no time axis).
+    """
+    if not logits_per_dim:
+        raise ValueError("logits_per_dim must be a non-empty sequence.")
+    aggregated: list[torch.Tensor] = []
+    for dim_idx, logits in enumerate(logits_per_dim):
+        if logits.ndim != 3:
+            raise ValueError(
+                f"aggregation requires (batch, time, num_classes) logits; "
+                f"got shape {tuple(logits.shape)} for dim {dim_idx}."
+            )
+        if mil_mode:
+            agg = _mil_marginal_probs(logits)                # (B, K_d), sums to 1
+        else:
+            probs = torch.softmax(logits, dim=-1)            # (B, T, K_d)
+            agg = probs.sum(dim=1)                            # (B, K_d), sums to T per row
+        # Normalize to a valid distribution. No-op for MIL; /T for non-MIL.
+        agg = agg / agg.sum(dim=-1, keepdim=True).clamp(min=eps)
+        aggregated.append(agg)
+    return aggregated
+
+
 __all__ = [
+    "aggregate_classifier_predictions",
     "interpolated_multi_head_cross_entropy",
     "inverse_frequency_class_weights",
     "mil_multi_head_cross_entropy",

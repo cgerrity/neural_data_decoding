@@ -52,7 +52,10 @@ from .training.freezing import build_optimizer_with_module_groups
 from .training.lifecycle import EpochHistory, fit_supervised, fit_two_stage
 from .training.losses.confidence import ConfidenceHistory
 from .training.losses.multi_objective import LossPriors
-from .training.losses.classification import inverse_frequency_class_weights
+from .training.losses.classification import (
+    aggregate_classifier_predictions,
+    inverse_frequency_class_weights,
+)
 from .training.schedules import (
     CurriculumBundle,
     KLBaseAnneal,
@@ -266,10 +269,12 @@ def _cmd_train(args: argparse.Namespace) -> int:
     # cgg_trainNetwork.m:636-641 pattern (both saves gated on IsOptimal).
     def _on_optimal(opt_model: torch.nn.Module, entry: EpochHistory) -> None:
         _write_cm_table_for_split(
-            opt_model, val_loader, result_dir / VALIDATION_CM_TABLE_FILENAME
+            opt_model, val_loader, result_dir / VALIDATION_CM_TABLE_FILENAME,
+            mil_mode=mil_mode,
         )
         _write_cm_table_for_split(
-            opt_model, test_loader, result_dir / TEST_CM_TABLE_FILENAME
+            opt_model, test_loader, result_dir / TEST_CM_TABLE_FILENAME,
+            mil_mode=mil_mode,
         )
         val_acc = entry.val.accuracy if entry.val is not None else float("nan")
         print(
@@ -774,6 +779,8 @@ def _write_cm_table_for_split(
     model: torch.nn.Module,
     loader: DataLoader,
     output_path: Path,
+    *,
+    mil_mode: bool = False,
 ) -> None:
     """Run ``model`` over ``loader`` and persist a CM_Table at ``output_path``.
 
@@ -782,13 +789,26 @@ def _write_cm_table_for_split(
     Selects between :class:`VariationalOutput` and a plain list[Tensor] of
     logits transparently so the same writer works for Milestones A, B,
     and C.
+
+    Two prediction columns are written:
+
+    * **Window prediction** — argmax of the last-timestep logits per dim.
+      Single-window placeholder until we wire per-timestep windows.
+    * **Aggregation prediction** — argmax of the normalized aggregated
+      probability distribution per dim (matches MATLAB's
+      ``Aggregation_Prediction`` column in
+      ``cgg_getClassifierOutputsFromProbabilities.m``). Computed
+      regardless of ``mil_mode``: non-MIL averages per-timestep softmax
+      (uniform prior over timesteps); MIL marginalizes the joint
+      softmax over T.
     """
     import numpy as np
 
     from .models.composite import VariationalOutput
 
     model.eval()
-    all_predictions: list[list[int]] = []
+    all_window_predictions: list[list[int]] = []
+    all_aggregation_predictions: list[list[int]] = []
     all_targets: list[list[int]] = []
     all_trial_ids: list[int] = []
     with torch.no_grad():
@@ -797,28 +817,52 @@ def _write_cm_table_for_split(
             # Variational composite returns VariationalOutput; classifier-only
             # composites return a list[Tensor] of per-dim logits directly.
             logits_per_dim = out.logits if isinstance(out, VariationalOutput) else out
-            per_trial_pred: list[list[int]] = []
-            for _d, logits in enumerate(logits_per_dim):
-                if logits.ndim == 3:
-                    logits = logits[:, -1, :]
-                pred = logits.argmax(dim=-1).tolist()
-                if not per_trial_pred:
-                    per_trial_pred = [[p] for p in pred]
+
+            # Window prediction: argmax of last-timestep logits per dim.
+            per_trial_window: list[list[int]] = []
+            for logits in logits_per_dim:
+                step_logits = logits[:, -1, :] if logits.ndim == 3 else logits
+                pred = step_logits.argmax(dim=-1).tolist()
+                if not per_trial_window:
+                    per_trial_window = [[p] for p in pred]
                 else:
                     for i, p in enumerate(pred):
-                        per_trial_pred[i].append(p)
-            all_predictions.extend(per_trial_pred)
+                        per_trial_window[i].append(p)
+            all_window_predictions.extend(per_trial_window)
+
+            # Aggregation prediction: per-trial uniform-prior aggregate
+            # (or MIL marginal). Only meaningful for sequence outputs.
+            if all(L.ndim == 3 for L in logits_per_dim):
+                aggregated_probs = aggregate_classifier_predictions(
+                    list(logits_per_dim), mil_mode=mil_mode,
+                )
+                per_trial_agg: list[list[int]] = []
+                for probs in aggregated_probs:               # (B, K_d) per dim
+                    pred = probs.argmax(dim=-1).tolist()
+                    if not per_trial_agg:
+                        per_trial_agg = [[p] for p in pred]
+                    else:
+                        for i, p in enumerate(pred):
+                            per_trial_agg[i].append(p)
+                all_aggregation_predictions.extend(per_trial_agg)
+            else:
+                # Non-sequence classifier (Milestone A logistic): the
+                # "aggregate" equals the window prediction by definition.
+                all_aggregation_predictions.extend(per_trial_window)
+
             all_targets.extend(batch["targets"].tolist())
             all_trial_ids.extend(m["trial_id"] for m in batch["metadata"])
 
     data_numbers = np.array(all_trial_ids, dtype=np.int32) + 1  # MATLAB 1-indexed
     true_values = np.array(all_targets, dtype=np.float64)
-    window = np.array(all_predictions, dtype=np.float64)
+    window = np.array(all_window_predictions, dtype=np.float64)
+    aggregation = np.array(all_aggregation_predictions, dtype=np.float64)
     write_cm_table_mat(
         output_path,
         data_numbers=data_numbers,
         true_values=true_values,
         window_predictions=[window],
+        aggregation_prediction=aggregation,
     )
 
 
