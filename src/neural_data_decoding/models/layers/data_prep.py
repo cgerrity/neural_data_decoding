@@ -138,10 +138,17 @@ class UnflattenPerWindow(nn.Module):
             If ``x.ndim != 3`` or the trailing axis doesn't match
             ``t * a * c``.
         """
+        # 5-D input is already in canonical layout — passthrough so
+        # post_decoder modules that produce 5-D directly (e.g. the
+        # Default S&F decoder that internally unflattens via its
+        # PerWindowConvolutionalCoder) compose without redundant
+        # reshape.
+        if x.ndim == 5:
+            return x
         if x.ndim != 3:
             raise ValueError(
-                f"UnflattenPerWindow expects a 3-D input (B, W, F); "
-                f"got shape {tuple(x.shape)}.",
+                f"UnflattenPerWindow expects a 3-D input (B, W, F) or a "
+                f"5-D passthrough (B, W, T, A, C); got shape {tuple(x.shape)}.",
             )
         # Singleton case (T = A = 1): passthrough — the 5-D shape would
         # be (B, W, 1, 1, C) and we'd rather return (B, W, C) so existing

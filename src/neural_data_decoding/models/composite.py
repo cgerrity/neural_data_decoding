@@ -59,6 +59,27 @@ from neural_data_decoding.models.layers.sampling import SamplingLayer
 from neural_data_decoding.models.stitching_fusion import build_stitching_fusion
 
 
+def _match_time_length_5d(x: torch.Tensor, target_t: int) -> torch.Tensor:
+    """Crop or zero-pad the within-window time axis of a 5-D tensor.
+
+    Strided per-window conv decoders (Default / Gemini S&F) can produce
+    outputs whose ``T`` differs from the encoder's input by a few
+    timesteps from transposed-conv stride math. This helper restores
+    the input ``T`` so the reconstruction loss can compare against the
+    5-D target element-wise.
+    """
+    current = x.size(2)
+    if current == target_t:
+        return x
+    if current > target_t:
+        return x[:, :, :target_t, :, :]
+    pad = target_t - current
+    # (B, W, T, A, C) — pad the T axis (dim 2). torch.nn.functional.pad
+    # pads from the last axis backwards, so the T padding is the 5th
+    # pair: (0, 0, 0, 0, 0, pad, 0, 0).
+    return torch.nn.functional.pad(x, (0, 0, 0, 0, 0, pad))
+
+
 class EncoderClassifierComposite(nn.Module):
     """Compose Encoder → Bottleneck → Classifier into a single trainable module.
 
@@ -274,9 +295,14 @@ class VariationalComposite(nn.Module):
             ``task_confidence`` (or ``None``).
         """
         x0 = self.nan_to_zero(x)
-        x0 = self.flatten(x0)
+        # Pre-encoder S&F bridges may operate on 5-D directly (Default /
+        # Gemini conv variants) or on flattened 3-D (Feedforward). Run
+        # before the flatten so conv bridges see the (T, A, C) structure
+        # explicitly; the flatten then collapses any remaining 5-D to
+        # 3-D for the main encoder.
         if self.pre_encoder is not None:
             x0 = self.pre_encoder(x0)
+        x0 = self.flatten(x0)
         encoded = self.encoder(x0)
         stats = self.bottleneck(encoded)
         z, mu, logvar = self.sampling(stats)
@@ -287,6 +313,11 @@ class VariationalComposite(nn.Module):
             if self.post_decoder is not None:
                 rec = self.post_decoder(rec)
             reconstruction = self.unflatten(rec)
+            # Conv-based S&F decoders can produce a slightly different T
+            # length than the input; crop/pad to match for the loss.
+            assert reconstruction is not None
+            if reconstruction.ndim == 5 and x.ndim == 5:
+                reconstruction = _match_time_length_5d(reconstruction, x.size(2))
 
         # Classifier path: when a Task confidence head is present, ask the
         # classifier to also surface its penultimate features (one tensor
@@ -520,9 +551,9 @@ class VariationalAutoencoder(nn.Module):
     def forward(self, x: torch.Tensor) -> AutoencoderOutput:
         """Run the Stage 1 forward pass: encode → sample → decode."""
         x0 = self.nan_to_zero(x)
-        x0 = self.flatten(x0)
         if self.pre_encoder is not None:
             x0 = self.pre_encoder(x0)
+        x0 = self.flatten(x0)
         encoded = self.encoder(x0)
         stats = self.bottleneck(encoded)
         z, mu, logvar = self.sampling(stats)
@@ -530,6 +561,8 @@ class VariationalAutoencoder(nn.Module):
         if self.post_decoder is not None:
             rec = self.post_decoder(rec)
         reconstruction = self.unflatten(rec)
+        if reconstruction.ndim == 5 and x.ndim == 5:
+            reconstruction = _match_time_length_5d(reconstruction, x.size(2))
         return AutoencoderOutput(reconstruction=reconstruction, mu=mu, logvar=logvar)
 
 
@@ -671,12 +704,16 @@ def _build_ae_core(
             in_features=flat_in_features,
             cross_area_fusion_size=cross_area_fusion_size,
             mode="Encoder",
+            samples_per_window=samples_per_window,
+            num_areas=num_areas,
         )
         post_decoder = build_stitching_fusion(
             sf_type,
             in_features=flat_in_features,
             cross_area_fusion_size=cross_area_fusion_size,
             mode="Decoder",
+            samples_per_window=samples_per_window,
+            num_areas=num_areas,
         )
         encoder_in_features = cross_area_fusion_size
         decoder_output_features = cross_area_fusion_size

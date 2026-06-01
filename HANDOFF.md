@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **550 passed, 4 deselected** by default; **4 passed** under
+Expected: **559 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -162,6 +162,36 @@ Milestone C status — what's done
   the Stage 1 dispatch in `_dispatch_two_stage`) reads `cfg.optimizer`
   (defaults to `"ADAM"`). Smoke check: `fit_supervised` with SGDM on
   synthetic data drops val_loss from 0.82 → 0.33 in 3 epochs.
+- **Stitching+Fusion Phase 2 — Default variant (per-window 2-D conv)**
+  (Milestone CC #3 Phase 2) — port of MATLAB's convolutional cross-area
+  encoder/decoder used by the ``'Default'`` S&F option-set. New
+  ``models/stitching_fusion/convolutional.py`` provides
+  :class:`PerWindowConvolutionalCoder` which operates per-window on the
+  ``(T, A, C)`` axes: reshape ``(B, W, T, A, C) → (B*W, A, C, T)``,
+  apply ``Conv2d`` with kernel ``(1, kernel_t)`` and stride
+  ``(1, stride_t)`` (semantically the MATLAB ``[1, n]`` kernel — filters
+  along ``T`` only, never crosses ``C``), reshape back to 5-D. Supports
+  ``want_split_areas=True`` (grouped conv with ``groups=A``, per the
+  user's note that within-area spatial info is meaningful while
+  across-area is not) and the cross-area variant
+  (``want_split_areas=False``). Multi-level stacks with optional
+  ``ResNet`` residuals and ``RepetitionsPerBlock`` mirror the MATLAB
+  pyramid; transposed convs handle the decoder upsample with optional
+  cropping. The Default S&F bridge wraps the conv coder with a leading
+  (decoder) or trailing (encoder) ``Linear`` projection to/from
+  ``CrossAreaFusionSize``, matching
+  ``cgg_constructStitchingAndFusionNetwork.m`` lines 84-129. Composite
+  forward gained a 5-D-aware time-axis crop/pad helper for the
+  transposed-conv stride math. The ``'Feedforward'`` bridge now also
+  accepts 5-D input (flattens internally) so the composite always
+  calls pre-encoder BEFORE the canonical flatten. 9 new tests cover
+  ``PerWindowConvolutionalCoder`` (split-areas, cross-area, ResNet,
+  the kernel-doesn't-mix-C invariant) and end-to-end Default S&F
+  through the composite (5-D shape contract, gradient flow,
+  Stage 1 autoencoder). Smoke run with
+  ``stitching_and_fusion_layer: "Default"`` completes 3 synthetic
+  epochs end-to-end. The 3 Gemini cascade variants (Phase 3) remain
+  pending.
 - **Data restructure to (W, T, A, C)** (correction landed alongside
   CC #3) — fixed a long-standing dimensional misunderstanding flagged
   by the user. The MATLAB data layout is ``(C, T, A, W, B)`` per

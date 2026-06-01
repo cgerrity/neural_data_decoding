@@ -77,19 +77,32 @@ def test_dispatcher_feedforward_decoder_mode() -> None:
 @pytest.mark.parametrize(
     "variant",
     [
-        "Default",
         "Parallel Single Level",
         "Cascade Single Kernel - Single Reduction",
         "Cascade Single Kernel - Progressive Reduction",
     ],
 )
 def test_dispatcher_pending_variants_raise_notimplemented(variant: str) -> None:
-    """Phase 2/3 variants are explicitly pending."""
+    """Phase 3 Gemini variants remain pending."""
     with pytest.raises(NotImplementedError, match="pending"):
         build_stitching_fusion(
             variant,
             in_features=8, cross_area_fusion_size=32, mode="Encoder",
         )
+
+
+def test_dispatcher_default_variant_builds_encoder_and_decoder() -> None:
+    """``'Default'`` variant builds without raising and returns nn.Module."""
+    import torch.nn as nn
+
+    enc = build_stitching_fusion(
+        "Default", in_features=8, cross_area_fusion_size=32, mode="Encoder",
+    )
+    dec = build_stitching_fusion(
+        "Default", in_features=8, cross_area_fusion_size=32, mode="Decoder",
+    )
+    assert isinstance(enc, nn.Module)
+    assert isinstance(dec, nn.Module)
 
 
 def test_dispatcher_unknown_variant_raises() -> None:

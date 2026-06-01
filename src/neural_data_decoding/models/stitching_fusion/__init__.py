@@ -28,6 +28,9 @@ caller computes the same from ``hidden_sizes[0] * 2`` and passes it via
 ``cross_area_fusion_size``.
 """
 
+from neural_data_decoding.models.stitching_fusion.convolutional import (
+    PerWindowConvolutionalCoder,
+)
 from neural_data_decoding.models.stitching_fusion.feedforward import (
     FeedforwardStitchingFusion,
     build_stitching_fusion,
@@ -35,5 +38,6 @@ from neural_data_decoding.models.stitching_fusion.feedforward import (
 
 __all__ = [
     "FeedforwardStitchingFusion",
+    "PerWindowConvolutionalCoder",
     "build_stitching_fusion",
 ]
