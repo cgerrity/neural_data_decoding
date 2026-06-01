@@ -55,8 +55,8 @@ from neural_data_decoding.training.losses.confidence import (
     compute_dropped_total_confidence,
 )
 from neural_data_decoding.training.losses.elbo import (
+    compute_reconstruction_loss,
     kl_divergence_loss,
-    masked_mse_reconstruction_loss,
 )
 from neural_data_decoding.training.losses.multi_objective import (
     LossPriors,
@@ -107,6 +107,7 @@ def train_one_epoch(
     confidence_history: Optional[ConfidenceHistory] = None,
     mil_mode: bool = False,
     accumulation_max_size: Optional[int] = None,
+    loss_type_decoder: str = "MSE",
 ) -> tuple[EpochMetrics, Optional[LossPriors], Optional[ConfidenceHistory]]:
     """Run one supervised training epoch — Milestone A classifier path.
 
@@ -247,8 +248,9 @@ def train_one_epoch(
                 recon_loss: Optional[torch.Tensor] = None
                 kl_loss: Optional[torch.Tensor] = None
                 if out.reconstruction is not None:
-                    recon_loss = masked_mse_reconstruction_loss(
-                        out.reconstruction, micro_x, batch_dim=0,
+                    recon_loss = compute_reconstruction_loss(
+                        out.reconstruction, micro_x,
+                        loss_type=loss_type_decoder, batch_dim=0,
                     )
                 kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
 
@@ -346,6 +348,7 @@ def validate(
     class_weights_per_dim: Optional[list[torch.Tensor]] = None,
     mil_mode: bool = False,
     use_interpolated_ce_for_confidence: bool = True,
+    loss_type_decoder: str = "MSE",
 ) -> EpochMetrics:
     """Run one validation pass — no gradients, no BN updates (Critical Note #34).
 
@@ -407,8 +410,9 @@ def validate(
                 )
             recon_loss = None
             if out.reconstruction is not None:
-                recon_loss = masked_mse_reconstruction_loss(
-                    out.reconstruction, x, batch_dim=0
+                recon_loss = compute_reconstruction_loss(
+                    out.reconstruction, x,
+                    loss_type=loss_type_decoder, batch_dim=0,
                 )
             kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
 
@@ -579,6 +583,7 @@ def train_unsupervised_epoch(
     device: torch.device,
     loss_weights: Mapping[str, float],
     grad_clip_norm: Optional[float] = None,
+    loss_type_decoder: str = "MSE",
 ) -> UnsupervisedEpochMetrics:
     """Run one Stage 1 unsupervised training epoch.
 
@@ -628,7 +633,9 @@ def train_unsupervised_epoch(
                 f"train_unsupervised_epoch expected AutoencoderOutput; "
                 f"got {type(out).__name__}."
             )
-        recon_loss = masked_mse_reconstruction_loss(out.reconstruction, x, batch_dim=0)
+        recon_loss = compute_reconstruction_loss(
+            out.reconstruction, x, loss_type=loss_type_decoder, batch_dim=0,
+        )
         kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
         total_loss = w_recon * recon_loss + w_kl * kl_loss
         total_loss.backward()
@@ -659,6 +666,7 @@ def validate_unsupervised(
     dataloader: DataLoader,
     device: torch.device,
     loss_weights: Mapping[str, float],
+    loss_type_decoder: str = "MSE",
 ) -> UnsupervisedEpochMetrics:
     """Stage 1 validation pass — no gradients, no priors, no classification."""
     model.eval()
@@ -680,7 +688,9 @@ def validate_unsupervised(
                 f"validate_unsupervised expected AutoencoderOutput; "
                 f"got {type(out).__name__}."
             )
-        recon_loss = masked_mse_reconstruction_loss(out.reconstruction, x, batch_dim=0)
+        recon_loss = compute_reconstruction_loss(
+            out.reconstruction, x, loss_type=loss_type_decoder, batch_dim=0,
+        )
         kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
         total_loss = w_recon * recon_loss + w_kl * kl_loss
 

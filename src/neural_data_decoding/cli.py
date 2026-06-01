@@ -350,6 +350,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
             confidence_history=initial_confidence_history,
             mil_mode=mil_mode,
             accumulation_max_size=accumulation_max_size,
+            loss_type_decoder=str(cfg.get("loss_type_decoder", "MSE")),
         )
 
     final_val_acc = history[-1].val.accuracy if history and history[-1].val else None
@@ -432,6 +433,7 @@ def _dispatch_two_stage(
         curriculum=curriculum,
         freeze_base_lr=float(cfg.initial_learning_rate),
         rescale_loss_epoch=int(cfg.get("rescale_loss_epoch", 0)),
+        loss_type_decoder=str(cfg.get("loss_type_decoder", "MSE")),
     )
     return stage2_history
 

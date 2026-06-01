@@ -103,6 +103,99 @@ def masked_mse_reconstruction_loss(
     return 0.5 * sq_sum / batch_size
 
 
+def masked_mae_reconstruction_loss(
+    y_pred: torch.Tensor,
+    y_target: torch.Tensor,
+    *,
+    batch_dim: int = 0,
+) -> torch.Tensor:
+    """NaN-masked MAE reconstruction loss, normalized by batch size.
+
+    Computes ``Σ(mask · |y_pred - y_target|) / N`` where ``mask =
+    ~isnan(y_target)`` and ``N`` is the size of ``batch_dim``. Matches
+    ``cgg_lossELBO_MAE.m`` line 9: ``l1loss(Y, T, Mask=~isnan(T))`` —
+    note the **absence** of the ``0.5`` factor that MSE has (l1loss is
+    just sum-of-absolutes, while ``0.5 * l2loss`` is half-sum-of-squares
+    by convention).
+
+    Same batch-size-not-mask-sum normalization as the MSE variant
+    (Critical Note #38 applies to both).
+
+    Parameters
+    ----------
+    y_pred
+        Decoder output. Must be finite (no ``NaN``).
+    y_target
+        The original reconstruction target, **with ``NaN`` preserved** at
+        removed-channel positions.
+    batch_dim
+        Axis to normalize by. Defaults to ``0``.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar (0-D) reconstruction loss, differentiable w.r.t. ``y_pred``.
+
+    Raises
+    ------
+    ValueError
+        If ``y_pred`` and ``y_target`` shapes differ.
+    """
+    if y_pred.shape != y_target.shape:
+        raise ValueError(
+            f"y_pred shape {tuple(y_pred.shape)} != y_target shape "
+            f"{tuple(y_target.shape)}."
+        )
+    mask = ~torch.isnan(y_target)
+    diff = torch.where(mask, y_pred - y_target, torch.zeros_like(y_pred))
+    abs_sum = diff.abs().sum()
+    batch_size = y_pred.shape[batch_dim]
+    return abs_sum / batch_size
+
+
+def compute_reconstruction_loss(
+    y_pred: torch.Tensor,
+    y_target: torch.Tensor,
+    *,
+    loss_type: str = "MSE",
+    batch_dim: int = 0,
+) -> torch.Tensor:
+    """Dispatch to the right kernel based on ``loss_type``.
+
+    Mirrors MATLAB's ``cgg_getDecoderOutputs`` line 23-29 switch:
+    ``'MSE'`` → :func:`masked_mse_reconstruction_loss`,
+    ``'MAE'`` → :func:`masked_mae_reconstruction_loss`. Case-insensitive.
+
+    Parameters
+    ----------
+    y_pred, y_target
+        See :func:`masked_mse_reconstruction_loss`.
+    loss_type
+        ``"MSE"`` (default) or ``"MAE"``.
+    batch_dim
+        Axis to normalize by. Defaults to ``0``.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar (0-D) reconstruction loss.
+
+    Raises
+    ------
+    ValueError
+        On unknown ``loss_type``.
+    """
+    upper = loss_type.upper()
+    if upper == "MSE":
+        return masked_mse_reconstruction_loss(y_pred, y_target, batch_dim=batch_dim)
+    if upper == "MAE":
+        return masked_mae_reconstruction_loss(y_pred, y_target, batch_dim=batch_dim)
+    raise ValueError(
+        f"Unknown loss_type: {loss_type!r}. Expected 'MSE' or 'MAE' "
+        f"(case-insensitive).",
+    )
+
+
 def kl_divergence_loss(
     mu: torch.Tensor,
     logvar: torch.Tensor,
@@ -190,7 +283,9 @@ def per_channel_reconstruction_loss(
 
 
 __all__ = [
+    "compute_reconstruction_loss",
     "kl_divergence_loss",
+    "masked_mae_reconstruction_loss",
     "masked_mse_reconstruction_loss",
     "per_channel_reconstruction_loss",
 ]

@@ -145,6 +145,7 @@ def fit_supervised(
     confidence_history: Optional["ConfidenceHistory"] = None,
     mil_mode: bool = False,
     accumulation_max_size: Optional[int] = None,
+    loss_type_decoder: str = "MSE",
 ) -> list[EpochHistory]:
     """Run the supervised Stage 2 fit loop end-to-end.
 
@@ -264,6 +265,7 @@ def fit_supervised(
             confidence_history=confidence_history,
             mil_mode=mil_mode,
             accumulation_max_size=accumulation_max_size,
+            loss_type_decoder=loss_type_decoder,
         )
         iteration += train_metrics.num_iterations
 
@@ -282,6 +284,7 @@ def fit_supervised(
                 loss_weights=epoch_loss_weights,
                 class_weights_per_dim=class_weights_per_dim,
                 mil_mode=mil_mode,
+                loss_type_decoder=loss_type_decoder,
             )
             if val_metrics.accuracy > best_metric:
                 best_metric = val_metrics.accuracy
@@ -348,6 +351,7 @@ def fit_unsupervised(
     epoch_callback: Optional[Callable[[UnsupervisedEpochHistory], None]] = None,
     curriculum: Optional[CurriculumBundle] = None,
     freeze_base_lr: Optional[float] = None,
+    loss_type_decoder: str = "MSE",
 ) -> list[UnsupervisedEpochHistory]:
     """Run Stage 1 unsupervised autoencoder pre-training.
 
@@ -401,6 +405,7 @@ def fit_unsupervised(
             device=device,
             loss_weights=epoch_loss_weights,
             grad_clip_norm=grad_clip_norm,
+            loss_type_decoder=loss_type_decoder,
         )
         iteration += train_metrics.num_iterations
 
@@ -412,6 +417,7 @@ def fit_unsupervised(
                 dataloader=val_loader,
                 device=device,
                 loss_weights=epoch_loss_weights,
+                loss_type_decoder=loss_type_decoder,
             )
             if val_metrics.total_loss < best_metric:
                 best_metric = val_metrics.total_loss
@@ -465,6 +471,7 @@ def fit_two_stage(
     rescale_loss_epoch: int = 0,
     loss_priors: Optional[LossPriors] = None,
     prior_proportion: float = 0.9,
+    loss_type_decoder: str = "MSE",
 ) -> tuple[list[UnsupervisedEpochHistory], list[EpochHistory]]:
     """Stage 1 unsupervised pre-training → handoff → Stage 2 supervised.
 
@@ -530,6 +537,7 @@ def fit_two_stage(
         epoch_callback=stage1_epoch_callback,
         curriculum=curriculum,
         freeze_base_lr=freeze_base_lr,
+        loss_type_decoder=loss_type_decoder,
     )
 
     # Handoff: load Stage 1 Optimal weights into the autoencoder instance,
@@ -563,6 +571,7 @@ def fit_two_stage(
         curriculum=curriculum,
         freeze_base_lr=freeze_base_lr,
         rescale_loss_epoch=rescale_loss_epoch,
+        loss_type_decoder=loss_type_decoder,
     )
 
     return stage1_history, stage2_history

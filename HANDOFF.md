@@ -2,7 +2,7 @@
 
 A self-contained snapshot of project state, conventions, and the next step.
 Intended for a fresh contributor (human or AI) picking up the work — read
-top-to-bottom, then start at "Next up". Last updated 2026-05-31.
+top-to-bottom, then start at "Next up". Last updated 2026-06-01.
 
 ## Where the project lives
 
@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **496 passed, 4 deselected** by default; **4 passed** under
+Expected: **506 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -84,7 +84,7 @@ neural_data_decoding/
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
-| CC — Extra-credit features | 🚧 **SGDM optimizer complete**; MAE / stitching+fusion pending | SGDM: configurable; momentum=0.9 default |
+| CC — Extra-credit features | 🚧 **SGDM optimizer + MAE decoder loss complete**; stitching+fusion pending | SGDM: configurable; MAE: kernel + dispatcher wired through fit_supervised/fit_unsupervised/fit_two_stage |
 | D — Cluster deployment | ⏳ Pending |  |
 
 Milestone C status — what's done
@@ -162,6 +162,22 @@ Milestone C status — what's done
   the Stage 1 dispatch in `_dispatch_two_stage`) reads `cfg.optimizer`
   (defaults to `"ADAM"`). Smoke check: `fit_supervised` with SGDM on
   synthetic data drops val_loss from 0.82 → 0.33 in 3 epochs.
+- **MAE decoder loss kernel** (Milestone CC #2) — port of MATLAB's
+  `cgg_lossELBO_MAE.m` and the `cgg_getDecoderOutputs.m` dispatch
+  switch on `LossType_Decoder`. New `masked_mae_reconstruction_loss`
+  in `training/losses/elbo.py` mirrors the MSE kernel's NaN-masking
+  + batch-size normalization (Critical Note #38 applies to both),
+  but uses `|diff|` and drops the `0.5` factor (MATLAB's `l1loss`
+  is sum-of-absolutes; only `0.5 * l2loss` carries the half).
+  New `compute_reconstruction_loss(..., loss_type=...)` dispatcher
+  routes `"MSE"` / `"MAE"` (case-insensitive). Wired through
+  `train_one_epoch` / `validate` / `train_unsupervised_epoch` /
+  `validate_unsupervised` and the orchestrators
+  `fit_supervised` / `fit_unsupervised` / `fit_two_stage`. CLI
+  reads `cfg.loss_type_decoder` (default `"MSE"`). Smoke runs of
+  both `C_optimal_synthetic.yaml` and `C_two_stage_synthetic.yaml`
+  with `loss_type_decoder: "MAE"` complete end-to-end (Stage 1 recon
+  drops 155→128 in 2 epochs with MAE scaling).
 - **Hardware-aware gradient accumulation** (Milestone C #9) — port of
   MATLAB's `cgg_procGradientAggregation.m` +
   `cgg_getAccumulationSizeForCurrentSystem.m`. New
@@ -325,7 +341,7 @@ Bring the Python port toward feature-parity with MATLAB's full
 configuration surface:
 
 - ~~**SGDM optimizer** alongside ADAM~~ ✅ done as CC #1
-- **MAE / alternate decoder loss kernels** (currently MSE-only)
+- ~~**MAE / alternate decoder loss kernels**~~ ✅ done as CC #2
 - **Stitching + fusion layer** for multi-probe data
 - **Misc** — items like ConfidenceDropout config field, etc.
 
