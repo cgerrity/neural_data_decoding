@@ -263,6 +263,70 @@ def _apply_confidence_dropout(
     return torch.where(mask, torch.ones_like(confidence), confidence)
 
 
+def compute_dropped_total_confidence(
+    trial_confidence: Optional[torch.Tensor],
+    task_confidence: Optional[torch.Tensor],
+    *,
+    confidence_dropout: float = 0.5,
+    time_dim: int = 1,
+    explicit_trial_dropout_mask: Optional[torch.Tensor] = None,
+    explicit_task_dropout_mask: Optional[torch.Tensor] = None,
+    generator: Optional[torch.Generator] = None,
+) -> Optional[torch.Tensor]:
+    """Compute the per-trial ``(last-timestep × dropout) TotalConfidence`` tensor.
+
+    Extracted from :func:`apply_confidence_routing` so callers that only
+    need the dropped per-trial confidence (e.g. ``validate()`` for the
+    Eq. 2 interpolated CE) can skip the full per-stream-loss + Beta
+    +EMA machinery, which are all history-dependent and pointless when
+    the caller discards the updated history.
+
+    Use ``confidence_dropout=1.0`` to disable masking (eval-mode parallel
+    to :class:`torch.nn.Dropout`); with ``1.0`` the returned tensor is
+    just the undropped per-trial conjunction.
+
+    Parameters
+    ----------
+    trial_confidence
+        Per-trial confidence sequence ``(B, T, 1)`` or ``None``.
+    task_confidence
+        Per-class confidence sequence ``(B, T, K)`` or ``None``.
+    confidence_dropout
+        Probability threshold for the dropout mask. ``1.0`` disables.
+    time_dim
+        Time axis of the confidence tensors.
+    explicit_trial_dropout_mask, explicit_task_dropout_mask
+        Optional explicit masks for deterministic tests.
+    generator
+        Optional :class:`torch.Generator` for reproducible random masks.
+
+    Returns
+    -------
+    torch.Tensor or None
+        ``(B, K_conf)`` per-trial total confidence after last-timestep
+        reduction and dropout. ``None`` when both inputs are ``None``.
+    """
+    task_dropped: Optional[torch.Tensor] = None
+    if task_confidence is not None:
+        task_undropped = _last_timestep(task_confidence, time_dim=time_dim)
+        task_dropped = _apply_confidence_dropout(
+            task_undropped, confidence_dropout,
+            mask=explicit_task_dropout_mask, generator=generator,
+        )
+
+    if trial_confidence is None:
+        return task_dropped
+
+    trial_undropped = _last_timestep(trial_confidence, time_dim=time_dim)
+    trial_dropped = _apply_confidence_dropout(
+        trial_undropped, confidence_dropout,
+        mask=explicit_trial_dropout_mask, generator=generator,
+    )
+    if task_dropped is None:
+        return trial_dropped
+    return task_dropped * trial_dropped
+
+
 def _compute_confidence_stream_loss(
     batch_instances: torch.Tensor,
     historical: torch.Tensor,

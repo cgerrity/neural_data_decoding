@@ -712,17 +712,20 @@ def test_train_one_epoch_without_confidence_returns_none_history() -> None:
 
 
 def test_validate_with_confidence_uses_interpolated_ce_no_dropout() -> None:
-    """validate() with confidence_history active uses Eq. 2 interpolated CE.
+    """validate() with confidence outputs active uses Eq. 2 interpolated CE.
 
     Verifies the eval-mode contract:
     - Returns deterministic loss across two runs (no random dropout).
-    - Loss differs from validate() called WITHOUT confidence_history
-      (which would use standard CE on raw logits).
-    - The passed-in confidence_history is NOT mutated.
+    - Loss differs from validate() called with the interpolation disabled
+      (which falls back to standard / MIL CE on raw logits).
+
+    NOTE: ``confidence_history`` is no longer a parameter — the dropped
+    per-trial total confidence is computed directly from the batch's
+    confidence outputs (no EMA, no Beta, no history). The previous
+    parameter was a no-op for the output value.
     """
     from neural_data_decoding.models.composite import build_variational_composite
     from neural_data_decoding.training.loop import validate
-    from neural_data_decoding.training.losses.confidence import ConfidenceHistory
 
     composite = build_variational_composite({
         "in_features": 4, "hidden_sizes": [8, 2],
@@ -739,28 +742,22 @@ def test_validate_with_confidence_uses_interpolated_ce_no_dropout() -> None:
     loader = DataLoader(ds, batch_size=2, collate_fn=collate_trials)
     weights = {"classification": 1.0, "reconstruction": 1.0, "kl": 0.01}
 
-    initial_history = ConfidenceHistory.initial(dtype=torch.float32)
-    # Snapshot beta + EMAs to verify non-mutation.
-    beta_before = float(initial_history.beta)
-
+    # Default: confidence-active interpolated CE.
     m1 = validate(
         model=composite, dataloader=loader, device=torch.device("cpu"),
-        loss_weights=weights, confidence_history=initial_history,
+        loss_weights=weights,
     )
     m2 = validate(
         model=composite, dataloader=loader, device=torch.device("cpu"),
-        loss_weights=weights, confidence_history=initial_history,
+        loss_weights=weights,
     )
-    # Deterministic across two runs (no random dropout).
+    # Deterministic across two runs (no random dropout in eval).
     assert m1.classification_loss == pytest.approx(m2.classification_loss, abs=1e-9)
-    # The passed-in history must be unchanged (no side effects).
-    assert float(initial_history.beta) == beta_before
 
-    # With no confidence_history, validate falls back to standard CE
-    # → typically different loss value than the interpolated path.
+    # Opt out → standard CE on raw logits → different value.
     m_no_conf = validate(
         model=composite, dataloader=loader, device=torch.device("cpu"),
-        loss_weights=weights,  # no confidence_history
+        loss_weights=weights, use_interpolated_ce_for_confidence=False,
     )
     # Interpolated CE ≤ standard CE for positive confidences (interpolation
     # mixes prediction with truth, never making it worse on the target). At
@@ -768,3 +765,73 @@ def test_validate_with_confidence_uses_interpolated_ce_no_dropout() -> None:
     assert m_no_conf.classification_loss != pytest.approx(
         m1.classification_loss, abs=1e-9,
     )
+
+
+def test_compute_dropped_total_confidence_matches_apply_confidence_routing() -> None:
+    """The extracted helper produces the same total_dropped tensor as the
+    full ``apply_confidence_routing`` kernel did (regression guard against
+    accidental divergence)."""
+    from neural_data_decoding.training.losses.confidence import (
+        ConfidenceHistory,
+        apply_confidence_routing,
+        compute_dropped_total_confidence,
+    )
+
+    torch.manual_seed(0)
+    trial = torch.rand(3, 5, 1) * 0.5 + 0.3   # (B, T, 1)
+    task  = torch.rand(3, 5, 4) * 0.5 + 0.3   # (B, T, 4)
+    # Use an explicit mask so both paths are bit-deterministic.
+    trial_mask = torch.tensor([[True], [False], [True]])
+    task_mask = torch.tensor([
+        [True,  False, True,  False],
+        [False, True,  False, True ],
+        [True,  True,  False, False],
+    ])
+
+    # Path 1: the lean helper.
+    td_helper = compute_dropped_total_confidence(
+        trial, task,
+        confidence_dropout=0.5,
+        explicit_trial_dropout_mask=trial_mask,
+        explicit_task_dropout_mask=task_mask,
+    )
+
+    # Path 2: the full kernel (history values are irrelevant for this).
+    cb = apply_confidence_routing(
+        y=torch.zeros(3, 5, 4), target=torch.zeros(3, 5, 4),
+        trial_confidence=trial, task_confidence=task,
+        history=ConfidenceHistory.initial(dtype=torch.float64).initial(),
+        batch_fraction=1.0,
+        confidence_dropout=0.5,
+        explicit_trial_dropout_mask=trial_mask,
+        explicit_task_dropout_mask=task_mask,
+        compute_interpolation=False,
+    )
+    assert td_helper is not None
+    assert cb.total_dropped is not None
+    torch.testing.assert_close(td_helper, cb.total_dropped, rtol=1e-12, atol=1e-12)
+
+
+def test_compute_dropped_total_confidence_handles_each_branch_present() -> None:
+    """Trial-only / task-only / both / neither all return the right shape (or None)."""
+    from neural_data_decoding.training.losses.confidence import (
+        compute_dropped_total_confidence,
+    )
+    trial = torch.full((2, 3, 1), 0.7)
+    task  = torch.full((2, 3, 4), 0.5)
+
+    # Both present → (B, K_task)
+    out = compute_dropped_total_confidence(trial, task, confidence_dropout=1.0)
+    assert out is not None and out.shape == (2, 4)
+
+    # Trial only → (B, 1)
+    out = compute_dropped_total_confidence(trial, None, confidence_dropout=1.0)
+    assert out is not None and out.shape == (2, 1)
+
+    # Task only → (B, K_task)
+    out = compute_dropped_total_confidence(None, task, confidence_dropout=1.0)
+    assert out is not None and out.shape == (2, 4)
+
+    # Neither → None
+    out = compute_dropped_total_confidence(None, None, confidence_dropout=1.0)
+    assert out is None

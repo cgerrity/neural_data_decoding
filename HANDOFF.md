@@ -148,6 +148,23 @@ Milestone C status — what's done
   shows augmentation, weights, and freeze ticking as expected and
   the train loss collapsing right when the classifier unfreezes
   at epoch 11.
+- **`confidence_history` cleanup** (resolved 2026-06-01) — Investigated
+  the user-flagged concern. Traced the chain `fit_supervised` →
+  `train_one_epoch` → `apply_confidence_routing` → `validate`. Verified
+  via diagnostic: validate's classification_loss is **bit-identical**
+  across three wildly different `confidence_history` values
+  (initial all-1.0, mid-range with custom Beta, near-zero with clamped
+  Beta). Cause: validate only consumes `cb_val.total_dropped`, which
+  is computed from the model's confidence outputs + dropout mask alone
+  (no EMA, no Beta, no history). The full `apply_confidence_routing`
+  was doing per-stream-loss + Beta-update work that was then thrown
+  away. Fix: extracted `compute_dropped_total_confidence` helper from
+  the kernel; `validate` now calls it directly and dropped the dead
+  `confidence_history` parameter (replaced with
+  `use_interpolated_ce_for_confidence: bool = True`). Regression
+  guard: tests pin that the helper produces the same `total_dropped`
+  as `apply_confidence_routing` does, and that all branch availability
+  combinations (trial-only / task-only / both / neither) work.
 - **Aggregate prediction column in CM_Table** (Milestone C #8b) — port
   of the `Aggregation_Prediction` column that MATLAB writes regardless
   of MIL mode (`cgg_getPredictionFromClassifierProbabilities.m` lines
@@ -263,17 +280,6 @@ Milestone C status — what's done
   reconstruction loss drops 85→36, KL ramps 0→1 in Stage 2 epochs 2-5,
   curriculum then takes over, final val_acc 0.438 beats the C #5
   single-stage 0.427).
-
-## Open concerns (flagged for later)
-
-- **`confidence_history` threading — possible issue (flagged 2026-05-31).**
-  User raised an uncertainty about whether `confidence_history` is wired
-  correctly through the training/validation path (no specific bug
-  identified yet). To investigate next time we revisit confidence: walk
-  through `fit_supervised` → `train_one_epoch` → `apply_confidence_routing`
-  → `validate` paths together, verify the history object's identity /
-  mutation / propagation pattern across iterations, and pin behavior
-  with explicit tests if anything looks off.
 
 ## Next up — Milestone C polish / cleanup, then CC or D
 

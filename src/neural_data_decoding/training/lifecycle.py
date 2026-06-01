@@ -268,13 +268,17 @@ def fit_supervised(
         val_metrics: Optional[EpochMetrics] = None
         is_best = False
         if val_loader is not None:
+            # NOTE (C #7c follow-up): validate() no longer takes
+            # confidence_history — the dropped per-trial total confidence
+            # (the only thing Eq. 2 interpolated CE needs) is computed
+            # directly from the batch's confidence outputs, no EMA / Beta
+            # / branch losses needed. See compute_dropped_total_confidence.
             val_metrics = validate(
                 model=model,
                 dataloader=val_loader,
                 device=device,
                 loss_weights=epoch_loss_weights,
                 class_weights_per_dim=class_weights_per_dim,
-                confidence_history=confidence_history,
                 mil_mode=mil_mode,
             )
             if val_metrics.accuracy > best_metric:
