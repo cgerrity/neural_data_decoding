@@ -150,7 +150,7 @@ are gitignored — regenerate them locally with the MATLAB-batch scripts in
 | 0 — Foundation | ✅ Complete |
 | A — Logistic tracer | ✅ Complete |
 | B — GRU + Classifier | ✅ Complete (T2 single-step parity verified) |
-| C — Full Optimal | 🚧 In progress (VAE / ELBO / confidence / MIL / curriculum) |
+| C — Full Optimal | ✅ Complete (VAE / ELBO / confidence / MIL / curriculum / two-stage / accumulation) |
 | CC — Extra-credit features | ⏳ Pending |
 | D — Cluster deployment | ⏳ Pending |
 | E — Educational curriculum | 🚧 Scaffolded (authored alongside code milestones) |

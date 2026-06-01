@@ -275,12 +275,9 @@ Milestone C status — what's done
   `C_optimal_synthetic.yaml` now enables `confidence_type: ['Trial', 'Task']`
   and `weight_confidence: 1`; smoke run completes 20 epochs with the
   confidence loss visible in training (and the model converging modestly
-  slower vs. no-confidence, as expected with the extra signal). NOTE:
-  Eq. 2 prediction-to-truth interpolation (`y_interpolated`) is computed
-  by the kernel but NOT yet wired through the classification loss
-  (`apply_confidence_routing(compute_interpolation=False)` in the
-  orchestrator); per-dim interpolated cross-entropy is deferred to a
-  follow-up.
+  slower vs. no-confidence, as expected with the extra signal). Eq. 2
+  prediction-to-truth interpolation was deferred from this commit and
+  landed in Milestone C #7b (see entry below).
 - **Full two-stage lifecycle** (Milestone C #6) — port of MATLAB's
   `cgg_trainAllAutoEncoder_v2`. Pythonic state machine, **not**
   file-existence branches: `fit_unsupervised` (Stage 1 — encoder +
@@ -299,31 +296,35 @@ Milestone C status — what's done
   curriculum then takes over, final val_acc 0.438 beats the C #5
   single-stage 0.427).
 
-## Next up — Milestone C polish / cleanup, then CC or D
+## Next up — Milestone C complete; pick CC or D
 
-Milestone C's *active production path* is now end-to-end runnable
-including confidence routing AND Eq. 2 interpolated CE. What remains
-is integration of features whose kernels exist but aren't yet woven
-into the variational forward path, plus hardware-aware tuning:
+Milestone C's *active production path* is now end-to-end runnable:
+variational core, curriculum schedules, two-stage lifecycle, confidence
+routing (with Beta P-controller, Eq. 2 interpolated CE, eval-mode
+dropout disabled, asymmetric/symmetric flag), MIL forward integration,
+aggregate prediction in CM_Table, and hardware-aware gradient
+accumulation. Pick the next fresh milestone:
 
-### Option A — Hardware-aware accumulation table (Critical Note #18)
+### Option A — Milestone CC (extra-credit features)
 
-The CLI ignores `cfg.accumulation_information`; current code always
-uses `mini_batch_size` for the actual forward batch size. MATLAB's
-`cgg_procGradientAggregation` accumulates multiple micro-batches per
-optimizer step when the device's `MaxBatchSize` is smaller than
-`MiniBatchSize`. Implement gradient accumulation that respects the
-hardware table.
+Bring the Python port toward feature-parity with MATLAB's full
+configuration surface:
 
-### (no other options — pick CC or D)
+- **SGDM optimizer** alongside ADAM (currently hardcoded to AdamW)
+- **MAE / alternate decoder loss kernels** (currently MSE-only)
+- **Stitching + fusion layer** for multi-probe data
+- **Misc** — items like ConfidenceDropout config field, etc.
 
-If the deferred Milestone C items aren't blocking real-data runs, jump
-ahead to:
-- **CC**: SGDM optimizer, alternate loss types (MAE), stitching/fusion
-  layer, etc. — niceties to bring the Python port to feature-parity
-  with MATLAB's full configuration surface.
-- **D**: submitit / Ray Tune sweep launchers, GPU training, ACCRE
-  integration.
+### Option B — Milestone D (cluster deployment)
+
+Get the Python port runnable on real GPU hardware:
+
+- **submitit / Ray Tune sweep launchers** for hyperparameter sweeps
+- **GPU + ACCRE integration** — real-data path with multi-probe SSCTB
+  inputs, `needReshape` plumbing, parallel `parfor`-equivalent
+  micro-batch processing
+- **Real-data dataset** — port `MatFileTrialDataset` (currently a
+  TODO comment in `dataset.py`); validate against real ephys files
 
 ### What "done" looks like across all of these
 
