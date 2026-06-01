@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **523 passed, 4 deselected** by default; **4 passed** under
+Expected: **550 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -84,7 +84,7 @@ neural_data_decoding/
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
-| CC — Extra-credit features | 🚧 **SGDM #1 + MAE #2 + S&F Phase 1 (Feedforward) complete**; S&F Default + Gemini variants pending | S&F: architectural hooks (pre_encoder/post_decoder) wired through composite + autoencoder + handoff |
+| CC — Extra-credit features | 🚧 SGDM #1 + MAE #2 + S&F Phase 1 (Feedforward) complete; **data restructure to (W, T, A, C) landed**; S&F Default + Gemini pending true 2-D conv work | Data layout now matches MATLAB's `InputSize=[C, T, A]` + W; trial shape canonical 4-D when T or A > 1, collapsed to 2-D (W, C) otherwise |
 | D — Cluster deployment | ⏳ Pending |  |
 
 Milestone C status — what's done
@@ -162,6 +162,32 @@ Milestone C status — what's done
   the Stage 1 dispatch in `_dispatch_two_stage`) reads `cfg.optimizer`
   (defaults to `"ADAM"`). Smoke check: `fit_supervised` with SGDM on
   synthetic data drops val_loss from 0.82 → 0.33 in 3 epochs.
+- **Data restructure to (W, T, A, C)** (correction landed alongside
+  CC #3) — fixed a long-standing dimensional misunderstanding flagged
+  by the user. The MATLAB data layout is ``(C, T, A, W, B)`` per
+  trial: ``W`` is the GRU sequence axis (windows), ``T`` is within-
+  window samples (MATLAB ``InputSize(2)``), ``A`` is areas (probes;
+  ``InputSize(3)``), ``C`` is channels per area (``InputSize(1)``).
+  The Python pipeline previously collapsed ``(C, T, A)`` into a
+  single ``features`` axis on read, so the convolutional encoder
+  variants (which need ``T``, ``A`` explicit) had no way to address
+  the right axes. New ``models/layers/data_prep.py`` provides
+  :class:`FlattenPerWindow` / :class:`UnflattenPerWindow`; the
+  composite flattens ``(B, W, T, A, C) → (B, W, T*A*C)`` before the
+  GRU and unflattens the decoder's output back to 5-D for the
+  reconstruction loss. ``SyntheticTrialDataset`` gained
+  ``samples_per_window`` and ``num_areas`` kwargs (defaults 1, 1 —
+  emits collapsed 2-D ``(W, C)`` for backwards compat); both Synthetic
+  Optimal and Two-Stage YAML configs now set ``T=2, A=2`` explicitly
+  to exercise the multi-dim path on smoke runs. 15 new unit tests
+  pin the multi-dim shape contract end-to-end. The convolutional
+  encoder + Default S&F variant work (CC #3 Phase 2) was deferred —
+  the first attempt was a 1-D conv over the W axis (wrong axis); the
+  faithful per-window 2-D conv over ``(T, C)`` with ``A`` as the
+  conv channel axis is the correct port and will follow this
+  restructure. The Phase 1 architectural hooks (``pre_encoder`` /
+  ``post_decoder`` slots; ``'Feedforward'`` S&F bridge) remain
+  intact.
 - **Stitching+Fusion Phase 1 — Feedforward variant** (Milestone CC #3
   Phase 1) — architectural hooks for the multi-area cross-fusion bridge
   described in `cgg_constructStitchingAndFusionNetwork.m`. `VariationalComposite`

@@ -50,6 +50,10 @@ from neural_data_decoding.models.confidence_heads import (
 )
 from neural_data_decoding.models.decoder import NoopDecoder, build_decoder
 from neural_data_decoding.models.encoder import SimpleSequenceEncoder
+from neural_data_decoding.models.layers.data_prep import (
+    FlattenPerWindow,
+    UnflattenPerWindow,
+)
 from neural_data_decoding.models.layers.nan_to_zero import NaNToZero
 from neural_data_decoding.models.layers.sampling import SamplingLayer
 from neural_data_decoding.models.stitching_fusion import build_stitching_fusion
@@ -91,13 +95,18 @@ class EncoderClassifierComposite(nn.Module):
         classifier: nn.Module,
     ) -> None:
         super().__init__()
+        self.flatten = FlattenPerWindow()
         self.encoder = encoder
         self.bottleneck = bottleneck
         self.classifier = classifier
 
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
-        """Apply Encoder → Bottleneck → Classifier and return per-dim logits."""
-        encoded = self.encoder(x)
+        """Apply Encoder → Bottleneck → Classifier and return per-dim logits.
+
+        Accepts ``(B, W, T, A, C)`` input; flattens the within-window
+        dims to ``(B, W, T*A*C)`` before the encoder.
+        """
+        encoded = self.encoder(self.flatten(x))
         bottle = self.bottleneck(encoded)
         return self.classifier(bottle)
 
@@ -200,6 +209,9 @@ class VariationalComposite(nn.Module):
         sampling: SamplingLayer,
         decoder: nn.Module,
         classifier: nn.Module,
+        samples_per_window: int = 1,
+        num_areas: int = 1,
+        in_features: Optional[int] = None,
         nan_to_zero: Optional[NaNToZero] = None,
         trial_confidence_head: Optional[TrialConfidenceHead] = None,
         task_confidence_head: Optional[TaskConfidenceHead] = None,
@@ -208,6 +220,20 @@ class VariationalComposite(nn.Module):
     ) -> None:
         super().__init__()
         self.nan_to_zero = nan_to_zero if nan_to_zero is not None else NaNToZero()
+        self.flatten = FlattenPerWindow()
+        # When T=A=1 (default), UnflattenPerWindow is a passthrough on
+        # the channel axis — we can safely pin in_features to anything
+        # consistent. When T or A > 1, in_features is required.
+        if (samples_per_window > 1 or num_areas > 1) and in_features is None:
+            raise ValueError(
+                "in_features must be provided when samples_per_window > 1 "
+                "or num_areas > 1 (the UnflattenPerWindow layer needs to "
+                "know the channels-per-area count C).",
+            )
+        self.unflatten = UnflattenPerWindow(
+            t=samples_per_window, a=num_areas,
+            c=in_features if in_features is not None else 1,
+        )
         self.pre_encoder = pre_encoder
         self.encoder = encoder
         self.bottleneck = bottleneck
@@ -231,9 +257,14 @@ class VariationalComposite(nn.Module):
         Parameters
         ----------
         x
-            Input tensor ``(batch, time, in_features)``. May contain
-            ``NaN`` at removed-channel positions; they are zeroed before
-            the encoder.
+            Input tensor ``(batch, W, T, A, C)``. May contain ``NaN`` at
+            removed-channel positions; they are zeroed before the
+            encoder. ``T``, ``A``, ``C`` are collapsed into a single
+            feature axis before the encoder via
+            :class:`~neural_data_decoding.models.layers.data_prep.FlattenPerWindow`;
+            the decoder's reconstruction is unflattened back to
+            ``(B, W, T, A, C)`` so the reconstruction loss compares
+            against the original 5-D target.
 
         Returns
         -------
@@ -243,6 +274,7 @@ class VariationalComposite(nn.Module):
             ``task_confidence`` (or ``None``).
         """
         x0 = self.nan_to_zero(x)
+        x0 = self.flatten(x0)
         if self.pre_encoder is not None:
             x0 = self.pre_encoder(x0)
         encoded = self.encoder(x0)
@@ -251,9 +283,10 @@ class VariationalComposite(nn.Module):
 
         reconstruction: Optional[torch.Tensor] = None
         if self.has_reconstruction:
-            reconstruction = self.decoder(z)
+            rec = self.decoder(z)
             if self.post_decoder is not None:
-                reconstruction = self.post_decoder(reconstruction)
+                rec = self.post_decoder(rec)
+            reconstruction = self.unflatten(rec)
 
         # Classifier path: when a Task confidence head is present, ask the
         # classifier to also surface its penultimate features (one tensor
@@ -337,6 +370,9 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
 
     encoder, bottleneck, sampling, decoder, pre_encoder, post_decoder = _build_ae_core(cfg)
     latent = int(cfg["hidden_sizes"][-1])
+    samples_per_window = int(cfg.get("samples_per_window", 1))
+    num_areas = int(cfg.get("num_areas", 1))
+    in_features = int(cfg["in_features"])
 
     classifier = DeepLSTMClassifier(
         in_features=latent,
@@ -367,6 +403,9 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
         sampling=sampling,
         decoder=decoder,
         classifier=classifier,
+        samples_per_window=samples_per_window,
+        num_areas=num_areas,
+        in_features=in_features,
         trial_confidence_head=trial_head,
         task_confidence_head=task_head,
         pre_encoder=pre_encoder,
@@ -452,12 +491,25 @@ class VariationalAutoencoder(nn.Module):
         bottleneck: nn.Module,
         sampling: SamplingLayer,
         decoder: nn.Module,
+        samples_per_window: int = 1,
+        num_areas: int = 1,
+        in_features: Optional[int] = None,
         nan_to_zero: Optional[NaNToZero] = None,
         pre_encoder: Optional[nn.Module] = None,
         post_decoder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
         self.nan_to_zero = nan_to_zero if nan_to_zero is not None else NaNToZero()
+        self.flatten = FlattenPerWindow()
+        if (samples_per_window > 1 or num_areas > 1) and in_features is None:
+            raise ValueError(
+                "in_features must be provided when samples_per_window > 1 "
+                "or num_areas > 1.",
+            )
+        self.unflatten = UnflattenPerWindow(
+            t=samples_per_window, a=num_areas,
+            c=in_features if in_features is not None else 1,
+        )
         self.pre_encoder = pre_encoder
         self.encoder = encoder
         self.bottleneck = bottleneck
@@ -468,14 +520,16 @@ class VariationalAutoencoder(nn.Module):
     def forward(self, x: torch.Tensor) -> AutoencoderOutput:
         """Run the Stage 1 forward pass: encode → sample → decode."""
         x0 = self.nan_to_zero(x)
+        x0 = self.flatten(x0)
         if self.pre_encoder is not None:
             x0 = self.pre_encoder(x0)
         encoded = self.encoder(x0)
         stats = self.bottleneck(encoded)
         z, mu, logvar = self.sampling(stats)
-        reconstruction = self.decoder(z)
+        rec = self.decoder(z)
         if self.post_decoder is not None:
-            reconstruction = self.post_decoder(reconstruction)
+            rec = self.post_decoder(rec)
+        reconstruction = self.unflatten(rec)
         return AutoencoderOutput(reconstruction=reconstruction, mu=mu, logvar=logvar)
 
 
@@ -513,6 +567,9 @@ def build_variational_autoencoder(cfg: Mapping[str, Any]) -> VariationalAutoenco
         )
     return VariationalAutoencoder(
         encoder=encoder, bottleneck=bottleneck, sampling=sampling, decoder=decoder,
+        samples_per_window=int(cfg.get("samples_per_window", 1)),
+        num_areas=int(cfg.get("num_areas", 1)),
+        in_features=int(cfg["in_features"]),
         pre_encoder=pre_encoder, post_decoder=post_decoder,
     )
 
@@ -584,6 +641,11 @@ def _build_ae_core(
             f"_build_ae_core: missing required cfg key {exc}"
         ) from exc
 
+    # Encoder/decoder operate post-flatten, so they see T*A*C features.
+    samples_per_window = int(cfg.get("samples_per_window", 1))
+    num_areas = int(cfg.get("num_areas", 1))
+    flat_in_features = in_features * samples_per_window * num_areas
+
     if len(hidden_sizes) < 2:
         raise ValueError(
             "hidden_sizes needs at least 2 entries (>=1 encoder layer + a "
@@ -600,19 +662,19 @@ def _build_ae_core(
     sf_type = str(cfg.get("stitching_and_fusion_layer", "")).strip()
     pre_encoder: Optional[nn.Module] = None
     post_decoder: Optional[nn.Module] = None
-    encoder_in_features = in_features
-    decoder_output_features = in_features
+    encoder_in_features = flat_in_features
+    decoder_output_features = flat_in_features
     if sf_type:
         cross_area_fusion_size = encoder_hidden[0] * 2
         pre_encoder = build_stitching_fusion(
             sf_type,
-            in_features=in_features,
+            in_features=flat_in_features,
             cross_area_fusion_size=cross_area_fusion_size,
             mode="Encoder",
         )
         post_decoder = build_stitching_fusion(
             sf_type,
-            in_features=in_features,
+            in_features=flat_in_features,
             cross_area_fusion_size=cross_area_fusion_size,
             mode="Decoder",
         )

@@ -388,6 +388,8 @@ def _dispatch_two_stage(
 
     ae_cfg = {
         "in_features": num_features,
+        "samples_per_window": int(cfg.get("synthetic_samples_per_window", 1)),
+        "num_areas": int(cfg.get("synthetic_num_areas", 1)),
         "hidden_sizes": list(cfg.hidden_sizes),
         "num_classes_per_dim": num_classes_per_dim,        # unused by AE builder
         "classifier_hidden_size": list(cfg.classifier_hidden_size),  # unused
@@ -396,6 +398,7 @@ def _dispatch_two_stage(
         "want_normalization": bool(cfg.want_normalization),
         "activation": str(cfg.activation),
         "loss_type_decoder": str(cfg.get("loss_type_decoder", "MSE")),
+        "stitching_and_fusion_layer": str(cfg.get("stitching_and_fusion_layer", "")),
     }
     autoencoder = build_variational_autoencoder(ae_cfg)
     stage1_optimizer = resolve_optimizer_factory(
@@ -534,6 +537,8 @@ def _build_model(
     if bool(cfg.get("is_variational", False)):
         variational_cfg = {
             "in_features": in_features,
+            "samples_per_window": int(cfg.get("synthetic_samples_per_window", 1)),
+            "num_areas": int(cfg.get("synthetic_num_areas", 1)),
             "hidden_sizes": list(cfg.hidden_sizes),
             "num_classes_per_dim": num_classes_per_dim,
             "classifier_hidden_size": list(cfg.classifier_hidden_size),
@@ -545,6 +550,8 @@ def _build_model(
             "classifier_dropout": float(cfg.get("classifier_dropout", 0.5)),
             # Confidence heads (Milestone C #7) — built when confidence_type is non-empty.
             "confidence_type": list(cfg.get("confidence_type", [])),
+            # Optional stitching+fusion bridge (Milestone CC #3).
+            "stitching_and_fusion_layer": str(cfg.get("stitching_and_fusion_layer", "")),
         }
         return build_variational_composite(variational_cfg)
 
@@ -630,6 +637,8 @@ def _build_synthetic_split(
         num_samples=int(cfg.synthetic_num_samples),
         num_features=int(cfg.synthetic_num_features),
         num_classes_per_dim=list(cfg.synthetic_num_classes_per_dim),
+        samples_per_window=int(cfg.get("synthetic_samples_per_window", 1)),
+        num_areas=int(cfg.get("synthetic_num_areas", 1)),
         signal_strength=float(cfg.synthetic_signal_strength),
         seed=fold_seed,
         load_schedule=train_load_schedule,
@@ -646,6 +655,8 @@ def _build_synthetic_split(
         num_samples=int(cfg.synthetic_num_samples),
         num_features=int(cfg.synthetic_num_features),
         num_classes_per_dim=list(cfg.synthetic_num_classes_per_dim),
+        samples_per_window=int(cfg.get("synthetic_samples_per_window", 1)),
+        num_areas=int(cfg.get("synthetic_num_areas", 1)),
         signal_strength=float(cfg.synthetic_signal_strength),
         seed=fold_seed + 1,
     )
@@ -659,6 +670,8 @@ def _build_synthetic_split(
         num_samples=int(cfg.synthetic_num_samples),
         num_features=int(cfg.synthetic_num_features),
         num_classes_per_dim=list(cfg.synthetic_num_classes_per_dim),
+        samples_per_window=int(cfg.get("synthetic_samples_per_window", 1)),
+        num_areas=int(cfg.get("synthetic_num_areas", 1)),
         signal_strength=float(cfg.synthetic_signal_strength),
         seed=fold_seed + 2,
     )

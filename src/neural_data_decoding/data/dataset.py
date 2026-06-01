@@ -7,18 +7,35 @@ the full training loop without needing the real ``.mat`` data on disk.
 A future milestone will add :class:`MatFileTrialDataset` that pulls
 trials from ``.mat`` files via :mod:`neural_data_decoding.data.mat_files`.
 
-Both datasets emit the same triple per ``__getitem__`` call:
+Trial shape contract
+--------------------
+Every dataset emits trials of shape ``(W, T, A, C)``:
 
-* ``x`` — feature tensor of shape ``(num_samples, num_features)``
+* **W** — windows per trial (the GRU/recurrent sequence axis).
+* **T** — samples per window (within-window time; MATLAB
+  ``InputSize(2)``).
+* **A** — number of areas (probes; MATLAB ``InputSize(3)``).
+* **C** — channels per area (MATLAB ``InputSize(1)``).
+
+Batched: ``(B, W, T, A, C)``. The composite flattens the within-window
+``(T, A, C)`` axes before the GRU/LSTM/Feedforward encoder via
+:class:`~neural_data_decoding.models.layers.data_prep.FlattenPerWindow`
+and unflattens the decoder's output before the reconstruction loss.
+
+Singleton dims (``T=1``, ``A=1``) are valid and reproduce the
+single-area, no-within-window-structure behavior. Multi-value dims
+(e.g. ``T=2``, ``A=2``) exercise the per-window conv path.
+
+Each ``__getitem__`` returns:
+
+* ``x`` — feature tensor of shape ``(W, T, A, C)``
 * ``targets`` — integer-class label per output dimension (shape ``(num_dimensions,)``)
 * ``metadata`` — dict with at least ``session_id`` (used by the
   :class:`~neural_data_decoding.data.samplers.SingleSessionBatchSampler`)
   and ``trial_id``
 
 The dataset returns the **NaN-zeroed input** as ``x`` (matching the
-encoder-input convention; see Critical Note #38). For a future
-reconstruction-loss path we'll also surface a NaN-preserving ``target``,
-but Milestone A is classifier-only so we don't need the second variant.
+encoder-input convention; see Critical Note #38).
 
 Examples
 --------
@@ -132,6 +149,8 @@ class SyntheticTrialDataset(Dataset):
         num_samples: int,
         num_features: int,
         num_classes_per_dim: list[int],
+        samples_per_window: int = 1,
+        num_areas: int = 1,
         signal_strength: float = 1.0,
         noise_std: float = 0.5,
         seed: int = 0,
@@ -142,6 +161,11 @@ class SyntheticTrialDataset(Dataset):
             raise ValueError("num_sessions and trials_per_session must be > 0.")
         if num_samples <= 0 or num_features <= 0:
             raise ValueError("num_samples and num_features must be > 0.")
+        if samples_per_window <= 0 or num_areas <= 0:
+            raise ValueError(
+                "samples_per_window and num_areas must be > 0 (use 1 for the "
+                "singleton case)."
+            )
         if not num_classes_per_dim or any(k <= 0 for k in num_classes_per_dim):
             raise ValueError(
                 "num_classes_per_dim must be a non-empty list of positive ints."
@@ -151,8 +175,10 @@ class SyntheticTrialDataset(Dataset):
 
         self.num_sessions = num_sessions
         self.trials_per_session = trials_per_session
-        self.num_samples = num_samples
-        self.num_features = num_features
+        self.num_samples = num_samples  # W (windows)
+        self.samples_per_window = samples_per_window  # T (within-window time)
+        self.num_areas = num_areas  # A
+        self.num_features = num_features  # C (channels per area)
         self.num_classes_per_dim = list(num_classes_per_dim)
         self.signal_strength = float(signal_strength)
         self.noise_std = float(noise_std)
@@ -160,13 +186,19 @@ class SyntheticTrialDataset(Dataset):
         total_trials = num_sessions * trials_per_session
         num_dims = len(num_classes_per_dim)
 
-        # Per-class signal centers in feature space. Each (dim, class)
-        # has a random unit-norm-ish direction; the active class's
-        # direction is added to every sample of the trial.
+        # Per-class signal centers spanning the full within-window
+        # tensor (T, A, C). Each (dim, class) has a random unit-norm
+        # direction across the flattened (T*A*C) feature space; the
+        # active class's direction is added uniformly to every window
+        # of the trial.
+        total_features = samples_per_window * num_areas * num_features
         class_signals: list[np.ndarray] = []
         for k in num_classes_per_dim:
-            signals = rng.standard_normal((k, num_features))
+            signals = rng.standard_normal((k, total_features))
             signals /= np.linalg.norm(signals, axis=1, keepdims=True) + 1e-9
+            # Reshape to (k, T, A, C) so the additive signal already lives
+            # in the same space as the trial tensor.
+            signals = signals.reshape(k, samples_per_window, num_areas, num_features)
             class_signals.append(signals)
         self._class_signals = class_signals
 
@@ -176,16 +208,18 @@ class SyntheticTrialDataset(Dataset):
             self._labels[:, d] = rng.integers(low=0, high=k, size=total_trials)
 
         # Per-trial features: precomputed once for determinism.
-        # Shape (total_trials, num_samples, num_features).
+        # Shape (total_trials, W, T, A, C).
         features = rng.standard_normal(
-            (total_trials, num_samples, num_features)
+            (total_trials, num_samples, samples_per_window, num_areas, num_features),
         ).astype(np.float32) * self.noise_std
 
         for d in range(num_dims):
             for trial_idx in range(total_trials):
                 cls = self._labels[trial_idx, d]
+                # Broadcast (T, A, C) signal across the W axis.
                 features[trial_idx] += (
-                    self.signal_strength * class_signals[d][cls].astype(np.float32)
+                    self.signal_strength
+                    * class_signals[d][cls][None, ...].astype(np.float32)
                 )
         self._features = features
 
@@ -228,7 +262,11 @@ class SyntheticTrialDataset(Dataset):
         Returns
         -------
         features : torch.Tensor
-            ``(num_samples, num_features)`` ``float32`` tensor.
+            ``float32`` feature tensor. Shape ``(W, T, A, C)`` when
+            ``samples_per_window > 1`` or ``num_areas > 1``; otherwise
+            collapsed to ``(W, C)`` (the singleton case — the within-
+            window structure is degenerate and tests/models that
+            predate the restructure expect the 2-D shape).
         targets : torch.Tensor
             ``(num_dimensions,)`` ``int64`` class labels (one per output
             dimension).
@@ -238,9 +276,16 @@ class SyntheticTrialDataset(Dataset):
         if idx < 0 or idx >= len(self):
             raise IndexError(f"Trial index {idx} out of range [0, {len(self)}).")
 
-        features_np = self._features[idx]  # (num_samples, num_features)
+        features_np = self._features[idx]  # (W, T, A, C)
         if self.load_schedule is not None:
             features_np = self._apply_augmentation(features_np)
+        # Collapse trailing singleton (T, A) dims so the singleton case
+        # presents the historical (W, C) shape — composites and bare
+        # models that operated on 3-D batched (B, W, C) data continue
+        # to work unchanged. Non-singleton configs see the full 4-D
+        # (W, T, A, C) shape.
+        if self.samples_per_window == 1 and self.num_areas == 1:
+            features_np = features_np.reshape(self.num_samples, self.num_features)
         features = torch.from_numpy(np.ascontiguousarray(features_np)).float()
         targets = torch.from_numpy(self._labels[idx]).long()
         metadata = {
@@ -254,11 +299,11 @@ class SyntheticTrialDataset(Dataset):
 
         Reads magnitudes from :attr:`load_schedule` **at call time** so
         the training loop's per-epoch ``schedule.update`` is reflected
-        on the very next batch (Critical Note #8). The augmentation kernel
-        expects ``(num_channels, num_samples, num_probes)``; the synthetic
-        dataset is single-probe, so we transpose ``(num_samples,
-        num_features)`` → ``(num_features, num_samples, 1)``, augment, and
-        transpose back.
+        on the very next batch (Critical Note #8). The augmentation
+        kernel expects ``(num_channels, num_samples, num_probes)``; for
+        the 5-D trial we treat ``W*T`` as the effective sample axis,
+        ``A`` as probes, and ``C`` as channels. We flatten ``(W, T)`` →
+        sample axis, augment, then unflatten back.
 
         A schedule that lacks a particular ``std_*`` key contributes 0
         for that augmentation component (matches MATLAB's NaN-disable).
@@ -269,17 +314,19 @@ class SyntheticTrialDataset(Dataset):
         def _current_or_none(name: str) -> float | None:
             return sched.current(name) if name in sched else None
 
-        ch_in = features_np.shape[1]
-        n_samp = features_np.shape[0]
+        w, t, a, c = features_np.shape
+        n_samp = w * t
         signal = additive_augmentation_signal(
-            shape=(ch_in, n_samp, 1),
+            shape=(c, n_samp, a),
             std_channel_offset=_current_or_none("std_channel_offset"),
             std_white_noise=_current_or_none("std_white_noise"),
             std_random_walk=_current_or_none("std_random_walk"),
             rng=self._aug_rng,
         )
-        # Convert (channels, samples, 1) → (samples, features) and add.
-        per_sample_noise = signal[:, :, 0].T  # (n_samp, ch_in)
+        # signal is (C, W*T, A); permute to (W*T, A, C) then unflatten
+        # back to (W, T, A, C) so it adds element-wise to the trial.
+        per_sample_noise = np.transpose(signal, (1, 2, 0))  # (W*T, A, C)
+        per_sample_noise = per_sample_noise.reshape(w, t, a, c)
         return features_np.astype(np.float32) + per_sample_noise.astype(np.float32)
 
 
@@ -301,8 +348,8 @@ def collate_trials(
     dict
         Keys:
 
-        * ``"x"`` — stacked features, shape ``(batch, num_samples, num_features)``
-        * ``"targets"`` — stacked targets, shape ``(batch, num_dimensions)``
+        * ``"x"`` — stacked features, shape ``(B, W, T, A, C)``
+        * ``"targets"`` — stacked targets, shape ``(B, num_dimensions)``
         * ``"metadata"`` — list of per-trial metadata dicts, in input order
     """
     x = torch.stack([item[0] for item in batch], dim=0)

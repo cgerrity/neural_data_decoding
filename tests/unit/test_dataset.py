@@ -132,7 +132,10 @@ def test_label_signal_is_recoverable() -> None:
         signal_strength=2.0, noise_std=0.2, seed=0,
     )
     # Use the per-class signal directly as a "classifier" (oracle linear probe).
-    signal = ds._class_signals[0]  # (num_classes, num_features)
+    # Signal is stored as (num_classes, T, A, C); flatten the within-window
+    # dims to compare against the flat feature vector emitted by the
+    # singleton (T=A=1) dataset.
+    signal = ds._class_signals[0].reshape(ds._class_signals[0].shape[0], -1)
     correct = 0
     for trial_idx in range(len(ds)):
         x, t, _ = ds[trial_idx]
