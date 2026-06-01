@@ -84,7 +84,7 @@ neural_data_decoding/
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
-| CC — Extra-credit features | 🚧 SGDM #1 + MAE #2 + S&F Phase 1 (Feedforward) complete; **data restructure to (W, T, A, C) landed**; S&F Default + Gemini pending true 2-D conv work | Data layout now matches MATLAB's `InputSize=[C, T, A]` + W; trial shape canonical 4-D when T or A > 1, collapsed to 2-D (W, C) otherwise |
+| CC — Extra-credit features | 🚧 3 of 8 sub-milestones done — CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants); CC.1 (full Conv/ResNet registry), CC.2 (PCA), CC.6 (learnable offset/scale), CC.7 (unweighted loss), CC.8 (SLURM sweep coverage) pending | Data restructure to `(W, T, A, C)` landed alongside CC.5 to match MATLAB's `InputSize=[C, T, A]`+W layout |
 | D — Cluster deployment | ⏳ Pending |  |
 
 Milestone C status — what's done
@@ -433,27 +433,57 @@ Milestone C status — what's done
   curriculum then takes over, final val_acc 0.438 beats the C #5
   single-stage 0.427).
 
-## Next up — Milestone C complete; pick CC or D
+## Next up — Milestone C complete; CC partial (3 of 8 done); pick CC remainder or D
 
-Milestone C's *active production path* is now end-to-end runnable:
-variational core, curriculum schedules, two-stage lifecycle, confidence
-routing (with Beta P-controller, Eq. 2 interpolated CE, eval-mode
-dropout disabled, asymmetric/symmetric flag), MIL forward integration,
-aggregate prediction in CM_Table, and hardware-aware gradient
-accumulation. Pick the next fresh milestone:
+Milestone C's *active production path* is end-to-end runnable
+(variational core, curriculum schedules, two-stage lifecycle,
+confidence routing with Beta P-controller and Eq. 2 interpolated CE,
+MIL forward integration, aggregate prediction in CM_Table, hardware-
+aware gradient accumulation). Milestone CC is partially done — 3 of
+the 8 sub-milestones in `docs/PLAN.md` are complete.
 
-### Option A — Milestone CC (extra-credit features)
+### Option A — finish Milestone CC
 
-Bring the Python port toward feature-parity with MATLAB's full
-configuration surface:
+The official numbering is from `docs/PLAN.md` lines 587-594 (CC.1 …
+CC.8). Past commits used my-own "CC #1/#2/#3" sequential labels for
+work order; the canonical mapping is:
 
-- ~~**SGDM optimizer** alongside ADAM~~ ✅ done as CC #1
-- ~~**MAE / alternate decoder loss kernels**~~ ✅ done as CC #2
-- ~~**Stitching + fusion layer** for multi-probe data~~ ✅ done as CC #3:
-  - ✅ Phase 1: Feedforward variant + composite hooks
-  - ✅ Phase 2: Default convolutional variant (per-window 2-D conv, WantSplitAreas)
-  - ✅ Phase 3: Three Gemini cascade variants
-- **Misc** — items like ConfidenceDropout config field, etc.
+* ~~**CC.4 — SGDM optimizer** alongside ADAM~~ ✅ done (commits
+  31caca0, labeled "CC #1" in commit message)
+* ~~**CC.3 — MAE / alternate decoder loss kernels**~~ ✅ done
+  (commit 7345022, labeled "CC #2")
+* ~~**CC.5 — Stitching + fusion layer**~~ ✅ all 5 variants done
+  (commits ed10e0b → 78eaba9, labeled "CC #3 Phases 1-3")
+  * Phase 1: Feedforward variant + composite hooks
+  * Phase 2: Default convolutional variant (per-window 2-D conv, WantSplitAreas)
+  * Phase 3: Three Gemini cascade variants
+* **CC.1 — Convolutional / ResNet architecture registry** — the 25+
+  named ModelName variants from
+  `PARAMETERS_cgg_constructNetworkArchitecture.m`. The
+  PerWindowConvolutionalCoder (CC.5 Phase 2) is a partial standalone
+  port; the full registry of ConvX/ResnetX/Multi-Filter variants with
+  split-area handling, ResNet path merging, post/pre-decoder conv,
+  and learnable offset/scale layers remains.
+* **CC.2 — PCA backbone** — frozen PCA encode/decode in
+  `models/layers/pca.py`, pre-compute components per fold via
+  `sklearn.decomposition.PCA`, inject as `nn.Linear` with
+  `requires_grad=False`.
+* **CC.6 — Learnable offset/scale augmentation** — port
+  `cgg_lossOffsetAndScale.m` augmentation loss + the corresponding
+  decoder-side learnable augmentation block (gated by
+  `WantLearnableOffset` / `WantLearnableScale`; auto-activated by
+  decoder graph topology per Critical Note #32).
+* **CC.7 — `WeightedLoss=''` unweighted path** — disabled-class-
+  weighting branch as a config-selectable alternative to `'Inverse'`.
+* **CC.8 — Full SLURM sweep parameter coverage** — audit
+  `SLURMPARAMETERS_cgg_runAutoEncoder_v2.m`'s 47-dim sweep; add
+  non-crash integration tests for representative slices.
+
+Other untracked items mentioned in passing:
+* **Data restructure to (W, T, A, C)** ✅ landed alongside CC.5 (the
+  dimensional fix the user flagged when the conv encoder was being
+  added).
+* **Misc** — items like ConfidenceDropout config field, etc.
 
 ### Option B — Milestone D (cluster deployment)
 

@@ -151,7 +151,7 @@ are gitignored — regenerate them locally with the MATLAB-batch scripts in
 | A — Logistic tracer | ✅ Complete |
 | B — GRU + Classifier | ✅ Complete (T2 single-step parity verified) |
 | C — Full Optimal | ✅ Complete (VAE / ELBO / confidence / MIL / curriculum / two-stage / accumulation) |
-| CC — Extra-credit features | ✅ SGDM #1, MAE #2, data restructure to (W, T, A, C), and all 5 S&F variants (Feedforward / Default / 3 Gemini cascades) |
+| CC — Extra-credit features | 🚧 3 of 8 sub-milestones done — CC.3 (MAE), CC.4 (SGDM), CC.5 (S&F all 5 variants); CC.1 (Conv/ResNet registry), CC.2 (PCA), CC.6 (learnable offset/scale), CC.7 (unweighted loss), CC.8 (SLURM sweep coverage) pending |
 | D — Cluster deployment | ⏳ Pending |
 | E — Educational curriculum | 🚧 Scaffolded (authored alongside code milestones) |
 | F — Reference documentation | 🚧 Scaffolded (authored alongside code milestones) |
