@@ -52,6 +52,7 @@ from neural_data_decoding.models.decoder import NoopDecoder, build_decoder
 from neural_data_decoding.models.encoder import SimpleSequenceEncoder
 from neural_data_decoding.models.layers.nan_to_zero import NaNToZero
 from neural_data_decoding.models.layers.sampling import SamplingLayer
+from neural_data_decoding.models.stitching_fusion import build_stitching_fusion
 
 
 class EncoderClassifierComposite(nn.Module):
@@ -202,13 +203,17 @@ class VariationalComposite(nn.Module):
         nan_to_zero: Optional[NaNToZero] = None,
         trial_confidence_head: Optional[TrialConfidenceHead] = None,
         task_confidence_head: Optional[TaskConfidenceHead] = None,
+        pre_encoder: Optional[nn.Module] = None,
+        post_decoder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
         self.nan_to_zero = nan_to_zero if nan_to_zero is not None else NaNToZero()
+        self.pre_encoder = pre_encoder
         self.encoder = encoder
         self.bottleneck = bottleneck
         self.sampling = sampling
         self.decoder = decoder
+        self.post_decoder = post_decoder
         self.classifier = classifier
         self.trial_confidence_head = trial_confidence_head
         self.task_confidence_head = task_confidence_head
@@ -238,6 +243,8 @@ class VariationalComposite(nn.Module):
             ``task_confidence`` (or ``None``).
         """
         x0 = self.nan_to_zero(x)
+        if self.pre_encoder is not None:
+            x0 = self.pre_encoder(x0)
         encoded = self.encoder(x0)
         stats = self.bottleneck(encoded)
         z, mu, logvar = self.sampling(stats)
@@ -245,6 +252,8 @@ class VariationalComposite(nn.Module):
         reconstruction: Optional[torch.Tensor] = None
         if self.has_reconstruction:
             reconstruction = self.decoder(z)
+            if self.post_decoder is not None:
+                reconstruction = self.post_decoder(reconstruction)
 
         # Classifier path: when a Task confidence head is present, ask the
         # classifier to also surface its penultimate features (one tensor
@@ -326,7 +335,7 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
             f"build_variational_composite: missing required cfg key {exc}"
         ) from exc
 
-    encoder, bottleneck, sampling, decoder = _build_ae_core(cfg)
+    encoder, bottleneck, sampling, decoder, pre_encoder, post_decoder = _build_ae_core(cfg)
     latent = int(cfg["hidden_sizes"][-1])
 
     classifier = DeepLSTMClassifier(
@@ -360,6 +369,8 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
         classifier=classifier,
         trial_confidence_head=trial_head,
         task_confidence_head=task_head,
+        pre_encoder=pre_encoder,
+        post_decoder=post_decoder,
     )
 
 
@@ -442,21 +453,29 @@ class VariationalAutoencoder(nn.Module):
         sampling: SamplingLayer,
         decoder: nn.Module,
         nan_to_zero: Optional[NaNToZero] = None,
+        pre_encoder: Optional[nn.Module] = None,
+        post_decoder: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
         self.nan_to_zero = nan_to_zero if nan_to_zero is not None else NaNToZero()
+        self.pre_encoder = pre_encoder
         self.encoder = encoder
         self.bottleneck = bottleneck
         self.sampling = sampling
         self.decoder = decoder
+        self.post_decoder = post_decoder
 
     def forward(self, x: torch.Tensor) -> AutoencoderOutput:
         """Run the Stage 1 forward pass: encode → sample → decode."""
         x0 = self.nan_to_zero(x)
+        if self.pre_encoder is not None:
+            x0 = self.pre_encoder(x0)
         encoded = self.encoder(x0)
         stats = self.bottleneck(encoded)
         z, mu, logvar = self.sampling(stats)
         reconstruction = self.decoder(z)
+        if self.post_decoder is not None:
+            reconstruction = self.post_decoder(reconstruction)
         return AutoencoderOutput(reconstruction=reconstruction, mu=mu, logvar=logvar)
 
 
@@ -484,7 +503,7 @@ def build_variational_autoencoder(cfg: Mapping[str, Any]) -> VariationalAutoenco
         If ``hidden_sizes`` has fewer than 2 entries, or
         ``loss_type_decoder`` is ``"None"`` (no reconstruction).
     """
-    encoder, bottleneck, sampling, decoder = _build_ae_core(cfg)
+    encoder, bottleneck, sampling, decoder, pre_encoder, post_decoder = _build_ae_core(cfg)
     if isinstance(decoder, NoopDecoder):
         raise ValueError(
             "Stage 1 (autoencoder) requires a real decoder for the "
@@ -494,6 +513,7 @@ def build_variational_autoencoder(cfg: Mapping[str, Any]) -> VariationalAutoenco
         )
     return VariationalAutoencoder(
         encoder=encoder, bottleneck=bottleneck, sampling=sampling, decoder=decoder,
+        pre_encoder=pre_encoder, post_decoder=post_decoder,
     )
 
 
@@ -521,17 +541,40 @@ def copy_autoencoder_weights(
     dst.bottleneck.load_state_dict(src.bottleneck.state_dict())
     dst.sampling.load_state_dict(src.sampling.state_dict())
     dst.decoder.load_state_dict(src.decoder.state_dict())
+    if src.pre_encoder is not None and dst.pre_encoder is not None:
+        dst.pre_encoder.load_state_dict(src.pre_encoder.state_dict())
+    if src.post_decoder is not None and dst.post_decoder is not None:
+        dst.post_decoder.load_state_dict(src.post_decoder.state_dict())
     # nan_to_zero is stateless (no learnables) — nothing to copy.
 
 
 def _build_ae_core(
     cfg: Mapping[str, Any],
-) -> tuple[SimpleSequenceEncoder, LinearBottleneck, SamplingLayer, nn.Module]:
+) -> tuple[
+    SimpleSequenceEncoder, LinearBottleneck, SamplingLayer, nn.Module,
+    Optional[nn.Module], Optional[nn.Module],
+]:
     """Shared construction for the autoencoder core (encoder + bottleneck + sampling + decoder).
 
     Extracted so :func:`build_variational_composite` and
     :func:`build_variational_autoencoder` stay DRY without inheriting from
     each other.
+
+    When ``cfg.stitching_and_fusion_layer`` is non-empty, the encoder is
+    sized around ``cross_area_fusion_size = hidden_sizes[0] * 2`` instead
+    of ``in_features`` (mirroring
+    ``cgg_constructNetworkArchitecture.m`` line 125), and the decoder
+    reconstructs to that same fusion-space dim. A ``pre_encoder`` bridge
+    projects raw ``in_features`` → fusion space and a ``post_decoder``
+    bridge projects fusion space → ``in_features`` for the reconstruction
+    loss. With S&F disabled both bridges are ``None`` and the existing
+    encoder/decoder topology is unchanged.
+
+    Returns
+    -------
+    tuple
+        ``(encoder, bottleneck, sampling, decoder, pre_encoder, post_decoder)``
+        — the last two are ``None`` when no S&F bridge is configured.
     """
     try:
         in_features = int(cfg["in_features"])
@@ -554,8 +597,30 @@ def _build_ae_core(
     want_normalization = bool(cfg.get("want_normalization", False))
     activation = str(cfg.get("activation", ""))
 
+    sf_type = str(cfg.get("stitching_and_fusion_layer", "")).strip()
+    pre_encoder: Optional[nn.Module] = None
+    post_decoder: Optional[nn.Module] = None
+    encoder_in_features = in_features
+    decoder_output_features = in_features
+    if sf_type:
+        cross_area_fusion_size = encoder_hidden[0] * 2
+        pre_encoder = build_stitching_fusion(
+            sf_type,
+            in_features=in_features,
+            cross_area_fusion_size=cross_area_fusion_size,
+            mode="Encoder",
+        )
+        post_decoder = build_stitching_fusion(
+            sf_type,
+            in_features=in_features,
+            cross_area_fusion_size=cross_area_fusion_size,
+            mode="Decoder",
+        )
+        encoder_in_features = cross_area_fusion_size
+        decoder_output_features = cross_area_fusion_size
+
     encoder = SimpleSequenceEncoder(
-        in_features=in_features,
+        in_features=encoder_in_features,
         hidden_sizes=encoder_hidden,
         transform=transform,
         dropout=dropout,
@@ -571,14 +636,14 @@ def _build_ae_core(
             "loss_type_decoder": str(cfg.get("loss_type_decoder", "None")),
             "latent_size": latent,
             "encoder_hidden_sizes": encoder_hidden,
-            "output_features": in_features,
+            "output_features": decoder_output_features,
             "transform": transform,
             "dropout": dropout,
             "want_normalization": want_normalization,
             "activation": activation,
         }
     )
-    return encoder, bottleneck, sampling, decoder
+    return encoder, bottleneck, sampling, decoder, pre_encoder, post_decoder
 
 
 __all__ = [

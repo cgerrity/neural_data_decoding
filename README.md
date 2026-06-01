@@ -135,7 +135,7 @@ python -m pytest
 python -m pytest -m needs_matlab
 ```
 
-Currently **506 tests pass** in the default suite (plus 4 MATLAB-gated parity
+Currently **523 tests pass** in the default suite (plus 4 MATLAB-gated parity
 tests that run with `-m needs_matlab`).
 
 Parity tests compare against MATLAB-generated reference fixtures. Those fixtures
@@ -151,7 +151,7 @@ are gitignored — regenerate them locally with the MATLAB-batch scripts in
 | A — Logistic tracer | ✅ Complete |
 | B — GRU + Classifier | ✅ Complete (T2 single-step parity verified) |
 | C — Full Optimal | ✅ Complete (VAE / ELBO / confidence / MIL / curriculum / two-stage / accumulation) |
-| CC — Extra-credit features | 🚧 In progress (SGDM #1, MAE #2 complete; stitching+fusion pending) |
+| CC — Extra-credit features | 🚧 In progress (SGDM #1, MAE #2, S&F Phase 1 Feedforward complete; S&F Default + Gemini pending) |
 | D — Cluster deployment | ⏳ Pending |
 | E — Educational curriculum | 🚧 Scaffolded (authored alongside code milestones) |
 | F — Reference documentation | 🚧 Scaffolded (authored alongside code milestones) |

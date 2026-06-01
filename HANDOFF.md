@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **506 passed, 4 deselected** by default; **4 passed** under
+Expected: **523 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -84,7 +84,7 @@ neural_data_decoding/
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
-| CC — Extra-credit features | 🚧 **SGDM optimizer + MAE decoder loss complete**; stitching+fusion pending | SGDM: configurable; MAE: kernel + dispatcher wired through fit_supervised/fit_unsupervised/fit_two_stage |
+| CC — Extra-credit features | 🚧 **SGDM #1 + MAE #2 + S&F Phase 1 (Feedforward) complete**; S&F Default + Gemini variants pending | S&F: architectural hooks (pre_encoder/post_decoder) wired through composite + autoencoder + handoff |
 | D — Cluster deployment | ⏳ Pending |  |
 
 Milestone C status — what's done
@@ -162,6 +162,28 @@ Milestone C status — what's done
   the Stage 1 dispatch in `_dispatch_two_stage`) reads `cfg.optimizer`
   (defaults to `"ADAM"`). Smoke check: `fit_supervised` with SGDM on
   synthetic data drops val_loss from 0.82 → 0.33 in 3 epochs.
+- **Stitching+Fusion Phase 1 — Feedforward variant** (Milestone CC #3
+  Phase 1) — architectural hooks for the multi-area cross-fusion bridge
+  described in `cgg_constructStitchingAndFusionNetwork.m`. `VariationalComposite`
+  + `VariationalAutoencoder` gained optional `pre_encoder` / `post_decoder`
+  slots; the forward methods route through them when set, and
+  `copy_autoencoder_weights` propagates bridge weights on the Stage 1 →
+  Stage 2 handoff. New `models/stitching_fusion/` package: `feedforward.py`
+  hosts `FeedforwardStitchingFusion` (a per-timestep `nn.Linear` matching
+  MATLAB's bare `fullyConnectedLayer(out_features)` block) plus the unified
+  `build_stitching_fusion(network_type, *, in_features, cross_area_fusion_size,
+  mode)` factory. The factory dispatches on MATLAB's option-set string
+  (`'Feedforward'`, `'Default'`, three Gemini variants); Phase 1 implements
+  `'Feedforward'` and raises `NotImplementedError` for the rest. Builder
+  in `_build_ae_core` reads `cfg.stitching_and_fusion_layer`; when non-empty,
+  derives `cross_area_fusion_size = hidden_sizes[0] * 2` (mirrors
+  `cgg_constructNetworkArchitecture.m:125`), sizes the encoder around the
+  fusion dim instead of raw `in_features`, sizes the decoder to reconstruct
+  to the fusion dim, then wires the bridges. With S&F disabled (default
+  empty string) the existing topology is unchanged. Smoke runs:
+  `C_optimal_synthetic.yaml` and `C_two_stage_synthetic.yaml` both
+  end-to-end with `stitching_and_fusion_layer: "Feedforward"` (two-stage
+  exercises the bridge weight handoff).
 - **MAE decoder loss kernel** (Milestone CC #2) — port of MATLAB's
   `cgg_lossELBO_MAE.m` and the `cgg_getDecoderOutputs.m` dispatch
   switch on `LossType_Decoder`. New `masked_mae_reconstruction_loss`
@@ -342,7 +364,10 @@ configuration surface:
 
 - ~~**SGDM optimizer** alongside ADAM~~ ✅ done as CC #1
 - ~~**MAE / alternate decoder loss kernels**~~ ✅ done as CC #2
-- **Stitching + fusion layer** for multi-probe data
+- **Stitching + fusion layer** for multi-probe data:
+  - ✅ Phase 1: Feedforward variant + composite hooks (CC #3 Phase 1)
+  - ⏳ Phase 2: Default convolutional variant (WantSplitAreas)
+  - ⏳ Phase 3: Three Gemini cascade variants (659-line MATLAB port)
 - **Misc** — items like ConfidenceDropout config field, etc.
 
 ### Option B — Milestone D (cluster deployment)
