@@ -124,7 +124,69 @@ def apply_freeze_to_optimizer(
         group["lr"] = base_lr * factor
 
 
+# Default SGDM momentum — matches MATLAB cgg_initializeOptimizerVariables.m
+# line 10 (which hardcodes 0.9 for the SGD case, where MATLAB's
+# sgdmupdate IS SGD with momentum despite the 'SGD' config name).
+SGDM_DEFAULT_MOMENTUM: float = 0.9
+
+
+def resolve_optimizer_factory(name: str) -> OptimizerFactory:
+    """Return a parameter-list → optimizer factory for the named optimizer.
+
+    Maps the MATLAB-style config string (``"ADAM"`` or ``"SGDM"``) to a
+    callable that wraps the appropriate PyTorch optimizer. The returned
+    factory is compatible with both standard call sites
+    (``factory(model.parameters(), lr=..., weight_decay=...)``) AND the
+    per-module-groups call from
+    :func:`build_optimizer_with_module_groups`, where ``lr`` is supplied
+    per group inside the param_group dicts.
+
+    Parameters
+    ----------
+    name
+        Case-insensitive optimizer name. ``"ADAM"`` →
+        :class:`torch.optim.AdamW`; ``"SGDM"`` →
+        :class:`torch.optim.SGD` with ``momentum=0.9`` (matches MATLAB's
+        ``sgdmupdate`` default; despite the MATLAB config name ``'SGD'``,
+        the implementation is SGD-with-momentum).
+
+    Returns
+    -------
+    OptimizerFactory
+        Callable that accepts ``(params, *, lr=..., weight_decay=...)``
+        kwargs and returns a configured optimizer.
+
+    Raises
+    ------
+    ValueError
+        On an unknown optimizer name.
+    """
+    upper = name.upper()
+    if upper == "ADAM":
+        # AdamW's lr defaults to 1e-3 in PyTorch — fine for the per-group
+        # case where each group brings its own lr.
+        return torch.optim.AdamW
+    if upper == "SGDM":
+        def sgdm_factory(
+            params: Any, *,
+            lr: float = 0.0,
+            weight_decay: float = 0.0,
+        ) -> torch.optim.Optimizer:
+            return torch.optim.SGD(
+                params, lr=lr, momentum=SGDM_DEFAULT_MOMENTUM,
+                weight_decay=weight_decay,
+            )
+        return sgdm_factory
+    raise ValueError(
+        f"Unknown optimizer name: {name!r}. Expected 'ADAM' or 'SGDM' "
+        f"(case-insensitive).",
+    )
+
+
 __all__ = [
+    "OptimizerFactory",
+    "SGDM_DEFAULT_MOMENTUM",
     "apply_freeze_to_optimizer",
     "build_optimizer_with_module_groups",
+    "resolve_optimizer_factory",
 ]

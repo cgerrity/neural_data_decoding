@@ -49,7 +49,10 @@ from .models.composite import (
 from .models.registry import build_classifier, build_encoder
 from .training.accumulation import get_accumulation_size_for_current_system
 from .training.checkpoint import has_existing_checkpoint
-from .training.freezing import build_optimizer_with_module_groups
+from .training.freezing import (
+    build_optimizer_with_module_groups,
+    resolve_optimizer_factory,
+)
 from .training.lifecycle import EpochHistory, fit_supervised, fit_two_stage
 from .training.losses.confidence import ConfidenceHistory
 from .training.losses.multi_objective import LossPriors
@@ -394,7 +397,9 @@ def _dispatch_two_stage(
         "loss_type_decoder": str(cfg.get("loss_type_decoder", "MSE")),
     }
     autoencoder = build_variational_autoencoder(ae_cfg)
-    stage1_optimizer = torch.optim.AdamW(
+    stage1_optimizer = resolve_optimizer_factory(
+        str(cfg.get("optimizer", "ADAM")),
+    )(
         autoencoder.parameters(),
         lr=float(cfg.initial_learning_rate),
         weight_decay=float(cfg.l2_factor),
@@ -722,17 +727,25 @@ def _build_optimizer(
 
     The freeze applier requires named param groups. When the curriculum's
     freeze schedule has waypoints for any submodule, build per-module
-    groups; otherwise stick with the simpler single-group AdamW.
+    groups; otherwise stick with the simpler single-group form.
+
+    The optimizer choice is driven by ``cfg.optimizer`` (case-insensitive,
+    ``"ADAM"`` or ``"SGDM"``); see
+    :func:`~neural_data_decoding.training.freezing.resolve_optimizer_factory`.
+    Defaults to ``"ADAM"`` when the field is absent.
     """
     lr = float(cfg.initial_learning_rate)
     wd = float(cfg.l2_factor)
+    optimizer_factory = resolve_optimizer_factory(str(cfg.get("optimizer", "ADAM")))
 
     needs_groups = curriculum is not None and any(
         len(curriculum.freeze[name].epoch_points) > 0
         for name in curriculum.freeze
     )
     if not needs_groups:
-        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+        return optimizer_factory(
+            model.parameters(), lr=lr, weight_decay=wd,
+        )
 
     # Per-module groups. Skip any submodule the model doesn't expose.
     module_groups: dict[str, torch.nn.Module] = {}
@@ -745,10 +758,13 @@ def _build_optimizer(
         # Caller passed a freeze schedule but the model has no exposed
         # submodules to attach groups to (e.g., MultiHeadClassifier).
         # Fall back to single-group; freeze just won't take effect.
-        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+        return optimizer_factory(
+            model.parameters(), lr=lr, weight_decay=wd,
+        )
 
     return build_optimizer_with_module_groups(
         module_groups, initial_lr=lr, weight_decay=wd,
+        optimizer_factory=optimizer_factory,
     )
 
 

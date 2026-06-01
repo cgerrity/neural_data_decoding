@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **491 passed, 4 deselected** by default; **4 passed** under
+Expected: **496 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -84,7 +84,7 @@ neural_data_decoding/
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
-| CC — Extra-credit features | ⏳ Pending |  |
+| CC — Extra-credit features | 🚧 **SGDM optimizer complete**; MAE / stitching+fusion pending | SGDM: configurable; momentum=0.9 default |
 | D — Cluster deployment | ⏳ Pending |  |
 
 Milestone C status — what's done
@@ -148,6 +148,20 @@ Milestone C status — what's done
   shows augmentation, weights, and freeze ticking as expected and
   the train loss collapsing right when the classifier unfreezes
   at epoch 11.
+- **SGDM optimizer** (Milestone CC #1) — port of MATLAB's SGDM path
+  in `cgg_procUpdateNetworks.m` (which despite the config name
+  `'SGD'` uses `sgdmupdate`, i.e. SGD with momentum). Default momentum
+  is 0.9 per `cgg_initializeOptimizerVariables.m` line 10. New
+  `resolve_optimizer_factory(name)` helper in `training/freezing.py`
+  maps `"ADAM"` → `torch.optim.AdamW` and `"SGDM"` →
+  `torch.optim.SGD` (with `momentum=SGDM_DEFAULT_MOMENTUM=0.9`). The
+  returned factory is compatible with both the standard
+  `(params, lr=..., weight_decay=...)` call site and the per-module-
+  groups call from `build_optimizer_with_module_groups` where per-group
+  `lr`s override the factory default. CLI's `_build_optimizer` (and
+  the Stage 1 dispatch in `_dispatch_two_stage`) reads `cfg.optimizer`
+  (defaults to `"ADAM"`). Smoke check: `fit_supervised` with SGDM on
+  synthetic data drops val_loss from 0.82 → 0.33 in 3 epochs.
 - **Hardware-aware gradient accumulation** (Milestone C #9) — port of
   MATLAB's `cgg_procGradientAggregation.m` +
   `cgg_getAccumulationSizeForCurrentSystem.m`. New
@@ -310,7 +324,7 @@ accumulation. Pick the next fresh milestone:
 Bring the Python port toward feature-parity with MATLAB's full
 configuration surface:
 
-- **SGDM optimizer** alongside ADAM (currently hardcoded to AdamW)
+- ~~**SGDM optimizer** alongside ADAM~~ ✅ done as CC #1
 - **MAE / alternate decoder loss kernels** (currently MSE-only)
 - **Stitching + fusion layer** for multi-probe data
 - **Misc** — items like ConfidenceDropout config field, etc.
