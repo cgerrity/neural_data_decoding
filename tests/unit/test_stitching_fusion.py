@@ -82,13 +82,16 @@ def test_dispatcher_feedforward_decoder_mode() -> None:
         "Cascade Single Kernel - Progressive Reduction",
     ],
 )
-def test_dispatcher_pending_variants_raise_notimplemented(variant: str) -> None:
-    """Phase 3 Gemini variants remain pending."""
-    with pytest.raises(NotImplementedError, match="pending"):
-        build_stitching_fusion(
-            variant,
-            in_features=8, cross_area_fusion_size=32, mode="Encoder",
-        )
+def test_dispatcher_gemini_variants_build(variant: str) -> None:
+    """Phase 3 Gemini variants build via the dispatcher (no NotImplementedError)."""
+    import torch.nn as nn
+
+    bridge = build_stitching_fusion(
+        variant,
+        in_features=8, cross_area_fusion_size=32, mode="Encoder",
+        samples_per_window=8, num_areas=1,
+    )
+    assert isinstance(bridge, nn.Module)
 
 
 def test_dispatcher_default_variant_builds_encoder_and_decoder() -> None:

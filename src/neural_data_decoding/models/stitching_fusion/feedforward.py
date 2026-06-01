@@ -25,6 +25,9 @@ import torch.nn as nn
 from neural_data_decoding.models.stitching_fusion.convolutional import (
     PerWindowConvolutionalCoder,
 )
+from neural_data_decoding.models.stitching_fusion.gemini import (
+    build_gemini_stitching_fusion,
+)
 
 
 class FeedforwardStitchingFusion(nn.Module):
@@ -142,10 +145,16 @@ def build_stitching_fusion(
         "Cascade Single Kernel - Single Reduction",
         "Cascade Single Kernel - Progressive Reduction",
     }:
-        raise NotImplementedError(
-            f"Stitching+Fusion variant {network_type!r} is pending (CC #3 "
-            "Phase 3 — Gemini cascade variants). 'Feedforward' and "
-            "'Default' are implemented.",
+        return _build_gemini_wrapper(
+            network_type=network_type,
+            num_areas=num_areas,
+            channels_per_area=(
+                in_features // max(1, samples_per_window * num_areas)
+                if (samples_per_window * num_areas) > 0
+                else in_features
+            ),
+            cross_area_fusion_size=cross_area_fusion_size,
+            mode=mode,
         )
     raise ValueError(
         f"Unknown stitching_and_fusion_layer: {network_type!r}. Expected "
@@ -279,6 +288,115 @@ class _DefaultStitchingFusionBridge(nn.Module):
         linear = self._ensure_linear(flat_dim, x.device)
         y = linear(x).reshape(b, w, t_in, a_in, c)
         return self.conv(y)
+
+
+class _GeminiStitchingFusionBridge(nn.Module):
+    """Wraps :class:`GeminiStitchingFusionModule` with the boundary
+    ``Linear`` projection to/from ``CrossAreaFusionSize``.
+
+    Encoder: 5-D ``(B, W, T, A, C)`` → conv module → flatten → ``Linear``
+    → 3-D ``(B, W, cross_area_fusion_size)``.
+
+    Decoder: 3-D ``(B, W, cross_area_fusion_size)`` → ``Linear`` →
+    reshape → conv module → 5-D ``(B, W, T, A, C)``.
+
+    The MATLAB call site in
+    ``cgg_constructStitchingAndFusionNetwork.m`` lines 47-62 invokes
+    ``cgg_createStitchingFusionModule_v2`` directly without a separate
+    Linear projection — the module's internal area_fusion and final
+    channel reduction handle the dimensional shaping. Our wrapper adds
+    the ``Linear`` so the Gemini bridge fits the same composite slot
+    contract as ``'Feedforward'`` and ``'Default'`` (input/output 3-D
+    at the ``CrossAreaFusionSize`` axis).
+    """
+
+    _DEFAULT_FILTERS_PER_AREA = 16
+
+    def __init__(
+        self,
+        *,
+        network_type: str,
+        num_areas: int,
+        in_features_per_area: int,
+        cross_area_fusion_size: int,
+        mode: Literal["Encoder", "Decoder"],
+    ) -> None:
+        super().__init__()
+        self.mode = mode
+        self.num_areas = num_areas
+        self.in_features_per_area = in_features_per_area
+        self.cross_area_fusion_size = cross_area_fusion_size
+        self.gemini = build_gemini_stitching_fusion(
+            network_type,
+            num_areas=num_areas,
+            filters_per_area=self._DEFAULT_FILTERS_PER_AREA,
+            mode=mode,
+        )
+        self._linear: Optional[nn.Linear] = None
+
+    def _ensure_linear(self, flat_dim: int, device: torch.device) -> nn.Linear:
+        if self._linear is None or (
+            self._linear.in_features != (
+                self.cross_area_fusion_size if self.mode == "Decoder" else flat_dim
+            )
+        ):
+            if self.mode == "Encoder":
+                self._linear = nn.Linear(flat_dim, self.cross_area_fusion_size).to(device)
+            else:
+                self._linear = nn.Linear(self.cross_area_fusion_size, flat_dim).to(device)
+            self.add_module("linear", self._linear)
+        return self._linear
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.mode == "Encoder":
+            if x.ndim != 5:
+                raise ValueError(
+                    f"Gemini S&F Encoder expects 5-D (B, W, T, A, C); "
+                    f"got {tuple(x.shape)}.",
+                )
+            y = self.gemini(x)  # (B, W, T', A_out, C')
+            b, w = y.shape[0], y.shape[1]
+            flat = y.reshape(b, w, -1)
+            linear = self._ensure_linear(flat.size(-1), flat.device)
+            return linear(flat)
+        # Decoder
+        if x.ndim != 3:
+            raise ValueError(
+                f"Gemini S&F Decoder expects 3-D (B, W, cross_area_fusion_size); "
+                f"got {tuple(x.shape)}.",
+            )
+        b, w, _ = x.shape
+        # Pick a small canonical (T_in, A_in, C_in) shape to feed the
+        # Gemini decoder. The Gemini decoder expects A axis =
+        # filters_per_area (the area-fused channel count from the
+        # encoder). T_in and C_in can be 1 since the decoder's
+        # transposed-conv stack expands them; the composite trims to
+        # the input shape after.
+        a_in = self._DEFAULT_FILTERS_PER_AREA
+        c_in = 1
+        t_in = 1
+        flat_dim = t_in * a_in * c_in
+        linear = self._ensure_linear(flat_dim, x.device)
+        y = linear(x).reshape(b, w, t_in, a_in, c_in)
+        return self.gemini(y)
+
+
+def _build_gemini_wrapper(
+    *,
+    network_type: str,
+    num_areas: int,
+    channels_per_area: int,
+    cross_area_fusion_size: int,
+    mode: Literal["Encoder", "Decoder"],
+) -> nn.Module:
+    """Construct a Gemini S&F bridge for the given option-set."""
+    return _GeminiStitchingFusionBridge(
+        network_type=network_type,
+        num_areas=num_areas,
+        in_features_per_area=channels_per_area,
+        cross_area_fusion_size=cross_area_fusion_size,
+        mode=mode,
+    )
 
 
 def _build_default_stitching_fusion(

@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **559 passed, 4 deselected** by default; **4 passed** under
+Expected: **580 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -162,6 +162,35 @@ Milestone C status — what's done
   the Stage 1 dispatch in `_dispatch_two_stage`) reads `cfg.optimizer`
   (defaults to `"ADAM"`). Smoke check: `fit_supervised` with SGDM on
   synthetic data drops val_loss from 0.82 → 0.33 in 3 epochs.
+- **Stitching+Fusion Phase 3 — Gemini cascade variants**
+  (Milestone CC #3 Phase 3) — port of MATLAB's
+  ``cgg_createStitchingFusionModule_v2.m`` (659 lines) restricted to
+  the operations exercised by the three active Gemini option-sets:
+  ``'Parallel Single Level'`` (multi-scale kernels ``[3, 5, 7]``, single
+  cascade), ``'Cascade Single Kernel - Single Reduction'`` (kernel 3,
+  3 cascades, reduce at stage 1), and ``'Cascade Single Kernel -
+  Progressive Reduction'`` (kernel 3, 3 cascades, reduce every stage,
+  ``EncoderReduction=[4, 2]``). New ``models/stitching_fusion/gemini.py``
+  hosts :class:`GeminiStitchingFusionModule` plus
+  :func:`build_gemini_stitching_fusion`. The module's encoder runs
+  parallel ``(kernel, cascade)`` branches via grouped Conv2d with
+  ``[1, kernel_t]`` kernels along ``T``, a bypass projection
+  (avg-pool + 1×1 grouped conv per ``StrideBypassMethod='avgpool'``),
+  branch addition + ReLU, a spatial conv along ``C``, then a final
+  ungrouped 1×1 ``area_fusion`` mixing across areas. The decoder
+  mirrors with transposed convs and ends in a grouped 1×1 channel
+  reduction. Composite's reconstruction-shape helper expanded from
+  T-only to both ``T`` and ``C`` axes (renamed
+  ``_match_time_length_5d`` → ``_match_shape_5d``) so the transposed-
+  conv stride-math drift doesn't break the loss. Dispatcher's
+  ``_GeminiStitchingFusionBridge`` wraps the Gemini module with the
+  same boundary ``Linear`` projection pattern as the Default bridge,
+  giving a consistent ``(B, W, CAF)`` 3-D contract at the composite
+  slot. 21 new tests cover all three variants (encoder/decoder
+  shapes, gradient flow, end-to-end composite + autoencoder). Smoke
+  run with ``stitching_and_fusion_layer: "Parallel Single Level"``
+  completes 3 synthetic epochs end-to-end. All 5 S&F option-sets are
+  now buildable via ``cfg.stitching_and_fusion_layer``.
 - **Stitching+Fusion Phase 2 — Default variant (per-window 2-D conv)**
   (Milestone CC #3 Phase 2) — port of MATLAB's convolutional cross-area
   encoder/decoder used by the ``'Default'`` S&F option-set. New
@@ -420,10 +449,10 @@ configuration surface:
 
 - ~~**SGDM optimizer** alongside ADAM~~ ✅ done as CC #1
 - ~~**MAE / alternate decoder loss kernels**~~ ✅ done as CC #2
-- **Stitching + fusion layer** for multi-probe data:
-  - ✅ Phase 1: Feedforward variant + composite hooks (CC #3 Phase 1)
-  - ⏳ Phase 2: Default convolutional variant (WantSplitAreas)
-  - ⏳ Phase 3: Three Gemini cascade variants (659-line MATLAB port)
+- ~~**Stitching + fusion layer** for multi-probe data~~ ✅ done as CC #3:
+  - ✅ Phase 1: Feedforward variant + composite hooks
+  - ✅ Phase 2: Default convolutional variant (per-window 2-D conv, WantSplitAreas)
+  - ✅ Phase 3: Three Gemini cascade variants
 - **Misc** — items like ConfidenceDropout config field, etc.
 
 ### Option B — Milestone D (cluster deployment)

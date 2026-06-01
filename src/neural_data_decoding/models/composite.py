@@ -59,25 +59,32 @@ from neural_data_decoding.models.layers.sampling import SamplingLayer
 from neural_data_decoding.models.stitching_fusion import build_stitching_fusion
 
 
-def _match_time_length_5d(x: torch.Tensor, target_t: int) -> torch.Tensor:
-    """Crop or zero-pad the within-window time axis of a 5-D tensor.
+def _match_shape_5d(x: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Crop or zero-pad ``x`` (5-D) to match ``target``'s ``(T, A, C)`` shape.
 
     Strided per-window conv decoders (Default / Gemini S&F) can produce
-    outputs whose ``T`` differs from the encoder's input by a few
-    timesteps from transposed-conv stride math. This helper restores
-    the input ``T`` so the reconstruction loss can compare against the
-    5-D target element-wise.
+    outputs whose ``T`` or ``C`` differs from the encoder's input by a
+    few units due to transposed-conv stride / padding math. This helper
+    restores the input shape so the reconstruction loss can compare
+    against the 5-D target element-wise. Crops along axis 2 (``T``) and
+    axis 4 (``C``); pads with zeros if ``x`` is smaller.
     """
-    current = x.size(2)
-    if current == target_t:
+    if x.shape == target.shape:
         return x
-    if current > target_t:
-        return x[:, :, :target_t, :, :]
-    pad = target_t - current
-    # (B, W, T, A, C) — pad the T axis (dim 2). torch.nn.functional.pad
-    # pads from the last axis backwards, so the T padding is the 5th
-    # pair: (0, 0, 0, 0, 0, pad, 0, 0).
-    return torch.nn.functional.pad(x, (0, 0, 0, 0, 0, pad))
+    # Trim larger axes first.
+    if x.size(2) > target.size(2):
+        x = x[:, :, : target.size(2), :, :]
+    if x.size(4) > target.size(4):
+        x = x[:, :, :, :, : target.size(4)]
+    # Zero-pad smaller axes. F.pad pads from the last axis backwards,
+    # so the layout is (C_left, C_right, A_left, A_right, T_left, T_right).
+    pad_c = max(0, target.size(4) - x.size(4))
+    pad_t = max(0, target.size(2) - x.size(2))
+    if pad_c > 0 or pad_t > 0:
+        x = torch.nn.functional.pad(x, (0, pad_c, 0, 0, 0, pad_t))
+    return x
+
+
 
 
 class EncoderClassifierComposite(nn.Module):
@@ -317,7 +324,7 @@ class VariationalComposite(nn.Module):
             # length than the input; crop/pad to match for the loss.
             assert reconstruction is not None
             if reconstruction.ndim == 5 and x.ndim == 5:
-                reconstruction = _match_time_length_5d(reconstruction, x.size(2))
+                reconstruction = _match_shape_5d(reconstruction, x)
 
         # Classifier path: when a Task confidence head is present, ask the
         # classifier to also surface its penultimate features (one tensor
@@ -562,7 +569,7 @@ class VariationalAutoencoder(nn.Module):
             rec = self.post_decoder(rec)
         reconstruction = self.unflatten(rec)
         if reconstruction.ndim == 5 and x.ndim == 5:
-            reconstruction = _match_time_length_5d(reconstruction, x.size(2))
+            reconstruction = _match_shape_5d(reconstruction, x)
         return AutoencoderOutput(reconstruction=reconstruction, mu=mu, logvar=logvar)
 
 
