@@ -195,6 +195,102 @@ def inverse_frequency_class_weights(
     return weights
 
 
+def mil_multi_head_cross_entropy(
+    logits_per_dim: Sequence[torch.Tensor],
+    targets: torch.Tensor,
+    *,
+    class_weights_per_dim: Sequence[torch.Tensor] | None = None,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """Multiple-Instance-Learning cross-entropy on per-dim marginal probabilities.
+
+    Mirrors the MATLAB MIL path: ``cgg_softmaxLayer('SCT')`` applies a
+    joint softmax across S/C/T axes (here just T/K — no spatial axis in
+    the synthetic data), then ``cgg_getPredictionFromClassifierProbabilities.m``
+    line 163 aggregates with ``sum(Y, [S, T])`` to get a per-trial
+    marginal over the class axis. CE is then computed on the marginal.
+
+    For each output dim ``d`` with logits shape ``(B, T, K_d)``:
+
+    1. Joint softmax over ``(T, K_d)``:
+       ``probs = softmax(logits.reshape(B, T*K_d))``, then reshape back.
+       Each ``(B,)`` slice sums to 1 over its ``T*K_d`` cells.
+    2. Marginal over K via ``probs.sum(dim=1)`` → ``(B, K_d)``. Still sums
+       to 1 over ``K_d``.
+    3. ``-log(marginal[target_d])`` per trial, mean over B, sum across dims.
+
+    Parameters
+    ----------
+    logits_per_dim
+        Per-dim logits, each ``(B, T, K_d)``. T must be present (the
+        whole point of MIL is bag aggregation over time).
+    targets
+        Integer class labels ``(B, num_dimensions)``.
+    class_weights_per_dim
+        Optional per-dim class weight vectors (same contract as
+        :func:`multi_head_cross_entropy`).
+    eps
+        Lower clamp on marginal probability before ``log``.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar (0-D) summed across dimensions of per-dim mean MIL CE.
+    """
+    if not logits_per_dim:
+        raise ValueError("logits_per_dim must be a non-empty sequence.")
+
+    num_dimensions = len(logits_per_dim)
+    if targets.ndim != 2 or targets.shape[1] != num_dimensions:
+        raise ValueError(
+            f"targets must have shape (batch, {num_dimensions}); "
+            f"got shape {tuple(targets.shape)}."
+        )
+    if class_weights_per_dim is not None and len(class_weights_per_dim) != num_dimensions:
+        raise ValueError(
+            f"class_weights_per_dim must have {num_dimensions} entries; "
+            f"got {len(class_weights_per_dim)}."
+        )
+
+    total = torch.zeros((), dtype=logits_per_dim[0].dtype, device=logits_per_dim[0].device)
+
+    for dim_idx, logits in enumerate(logits_per_dim):
+        if logits.ndim != 3:
+            raise ValueError(
+                f"MIL CE requires (batch, time, num_classes) logits; "
+                f"got shape {tuple(logits.shape)} for dim {dim_idx}."
+            )
+        dim_target = targets[:, dim_idx]                          # (B,)
+        marginal = _mil_marginal_probs(logits)                    # (B, K_d)
+
+        # NLL on marginal: -log(marginal[target_class]).
+        p_target = marginal.gather(-1, dim_target.unsqueeze(-1)).squeeze(-1)
+        per_trial_loss = -torch.log(p_target.clamp(min=eps))      # (B,)
+
+        if class_weights_per_dim is not None:
+            weights = class_weights_per_dim[dim_idx]              # (K_d,)
+            per_trial_loss = per_trial_loss * weights.gather(0, dim_target)
+
+        total = total + per_trial_loss.mean()
+
+    return total
+
+
+def _mil_marginal_probs(logits: torch.Tensor) -> torch.Tensor:
+    """Joint softmax over ``(T, K)`` then sum over ``T`` → ``(B, K)`` marginal.
+
+    Mirrors MATLAB's ``cgg_softmaxLayer('SCT').predict`` followed by
+    ``sum(Y, [S, T])`` from ``cgg_getPredictionFromClassifierProbabilities.m``.
+    No spatial ``S`` axis in this codebase yet; the function handles
+    only the ``(B, T, K)`` case. When real data introduces ``S``, extend
+    by reshaping appropriately.
+    """
+    batch, time, k = logits.shape
+    flat = logits.reshape(batch, time * k)
+    joint_probs = torch.softmax(flat, dim=-1).reshape(batch, time, k)
+    return joint_probs.sum(dim=1)
+
+
 def interpolated_multi_head_cross_entropy(
     logits_per_dim: Sequence[torch.Tensor],
     targets: torch.Tensor,
@@ -202,6 +298,7 @@ def interpolated_multi_head_cross_entropy(
     *,
     class_weights_per_dim: Sequence[torch.Tensor] | None = None,
     eps: float = 1e-12,
+    mil: bool = False,
 ) -> torch.Tensor:
     """Per-dimension cross-entropy on confidence-interpolated predictions (Eq. 2).
 
@@ -237,6 +334,13 @@ def interpolated_multi_head_cross_entropy(
     eps
         Lower clamp on the interpolated probability before ``log`` to
         avoid ``-inf`` at zero confidence on a wrong prediction.
+    mil
+        When ``True``, apply the MIL joint softmax + temporal aggregation
+        before the interpolation (mirrors :func:`mil_multi_head_cross_entropy`'s
+        first two steps). The interpolation closed-form is then applied
+        to the per-trial marginal probability instead of the per-
+        timestep probability. ``False`` (default): per-timestep
+        prediction-to-truth interpolation as in C #7b.
 
     Returns
     -------
@@ -291,23 +395,30 @@ def interpolated_multi_head_cross_entropy(
 
         # Slice per-dim confidence — broadcast across dims when K_conf == 1.
         c_slice = total_dropped[:, 0] if k_conf == 1 else total_dropped[:, dim_idx]
-        # Shape (B, 1) for time-axis broadcast.
-        c = c_slice.unsqueeze(-1)
 
-        # Predicted probability of the true class at every timestep.
-        probs = torch.softmax(logits, dim=-1)                     # (B, T, K_d)
-        target_broadcast = dim_target.view(batch, 1, 1).expand(batch, time, 1)
-        p_target = probs.gather(-1, target_broadcast).squeeze(-1)  # (B, T)
-
-        # Closed-form interpolated CE for one-hot targets:
-        # Y'[target] = c * p_target + (1 - c) → -log(...)
-        interpolated = c * p_target + (1.0 - c)
-        per_trial_loss = -torch.log(interpolated.clamp(min=eps))   # (B, T)
-
-        if class_weights_per_dim is not None:
-            weights = class_weights_per_dim[dim_idx]              # (K_d,)
-            per_trial_weight = weights.gather(0, dim_target)       # (B,)
-            per_trial_loss = per_trial_loss * per_trial_weight.unsqueeze(-1)
+        if mil:
+            # MIL: joint softmax over (T, K) → sum over T → marginal (B, K).
+            # Then interpolate the SCALAR per-trial marginal of the target
+            # class. No time axis to preserve here.
+            marginal = _mil_marginal_probs(logits)                # (B, K_d)
+            p_target = marginal.gather(-1, dim_target.unsqueeze(-1)).squeeze(-1)  # (B,)
+            interpolated = c_slice * p_target + (1.0 - c_slice)   # (B,)
+            per_trial_loss = -torch.log(interpolated.clamp(min=eps))  # (B,)
+            if class_weights_per_dim is not None:
+                weights = class_weights_per_dim[dim_idx]
+                per_trial_loss = per_trial_loss * weights.gather(0, dim_target)
+        else:
+            # Standard per-timestep interpolation (C #7b path).
+            c = c_slice.unsqueeze(-1)                              # (B, 1)
+            probs = torch.softmax(logits, dim=-1)                  # (B, T, K_d)
+            target_broadcast = dim_target.view(batch, 1, 1).expand(batch, time, 1)
+            p_target = probs.gather(-1, target_broadcast).squeeze(-1)  # (B, T)
+            interpolated = c * p_target + (1.0 - c)
+            per_trial_loss = -torch.log(interpolated.clamp(min=eps))   # (B, T)
+            if class_weights_per_dim is not None:
+                weights = class_weights_per_dim[dim_idx]
+                per_trial_weight = weights.gather(0, dim_target)
+                per_trial_loss = per_trial_loss * per_trial_weight.unsqueeze(-1)
 
         total = total + per_trial_loss.mean()
 
@@ -317,5 +428,6 @@ def interpolated_multi_head_cross_entropy(
 __all__ = [
     "interpolated_multi_head_cross_entropy",
     "inverse_frequency_class_weights",
+    "mil_multi_head_cross_entropy",
     "multi_head_cross_entropy",
 ]

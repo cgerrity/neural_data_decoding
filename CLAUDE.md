@@ -22,7 +22,7 @@ the MATLAB sources are referenced for parity testing only.
   `Processing_Functions_cgg/`. The fallbacks try the parent of the project
   root (legacy layout) and a known absolute path; if neither works the
   fixture scripts error clearly.
-- **Tests:** `python -m pytest` runs the default 455 tests in ~3s. MATLAB-gated
+- **Tests:** `python -m pytest` runs the default 470 tests in ~3s. MATLAB-gated
   parity (`-m needs_matlab`) needs a MATLAB executable + the source root
   resolvable.
 - **Static checking:** `pyright` runs project-wide with zero errors. The

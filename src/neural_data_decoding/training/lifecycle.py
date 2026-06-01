@@ -143,6 +143,7 @@ def fit_supervised(
     freeze_base_lr: Optional[float] = None,
     rescale_loss_epoch: int = 0,
     confidence_history: Optional["ConfidenceHistory"] = None,
+    mil_mode: bool = False,
 ) -> list[EpochHistory]:
     """Run the supervised Stage 2 fit loop end-to-end.
 
@@ -260,6 +261,7 @@ def fit_supervised(
             prior_proportion=prior_proportion,
             update_priors_strategy=strategy,
             confidence_history=confidence_history,
+            mil_mode=mil_mode,
         )
         iteration += train_metrics.num_iterations
 
@@ -273,6 +275,7 @@ def fit_supervised(
                 loss_weights=epoch_loss_weights,
                 class_weights_per_dim=class_weights_per_dim,
                 confidence_history=confidence_history,
+                mil_mode=mil_mode,
             )
             if val_metrics.accuracy > best_metric:
                 best_metric = val_metrics.accuracy

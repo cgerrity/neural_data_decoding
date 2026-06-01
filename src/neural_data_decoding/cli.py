@@ -240,6 +240,10 @@ def _cmd_train(args: argparse.Namespace) -> int:
     confidence_active = is_variational and bool(
         cfg.get("confidence_type") and float(cfg.get("weight_confidence", 0)) != 0,
     )
+    mil_mode = (
+        is_variational
+        and str(cfg.get("multiple_instance_learning_type", "None")) == "MIL"
+    )
     initial_confidence_history: Optional["ConfidenceHistory"] = None
     if is_variational:
         loss_weights_dict: dict[str, float] = {
@@ -313,6 +317,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
             freeze_base_lr=float(cfg.initial_learning_rate),
             rescale_loss_epoch=int(cfg.get("rescale_loss_epoch", 0)),
             confidence_history=initial_confidence_history,
+            mil_mode=mil_mode,
         )
 
     final_val_acc = history[-1].val.accuracy if history and history[-1].val else None

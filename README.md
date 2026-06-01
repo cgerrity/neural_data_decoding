@@ -87,7 +87,7 @@ cluster-equivalent paths.
 | Full two-stage lifecycle + KL annealing | ✅ Milestone C #6 |
 | Confidence routing in variational forward path | ✅ Milestone C #7 |
 | Eq. 2 interpolated cross-entropy | ✅ Milestone C #7b |
-| MIL in variational forward path | 🚧 Milestone C polish |
+| MIL pooling in variational forward path | ✅ Milestone C #8 |
 
 ### Parity precision achieved (T2 single-step forward pass)
 
@@ -134,7 +134,7 @@ python -m pytest
 python -m pytest -m needs_matlab
 ```
 
-Currently **455 tests pass** in the default suite (plus 4 MATLAB-gated parity
+Currently **470 tests pass** in the default suite (plus 4 MATLAB-gated parity
 tests that run with `-m needs_matlab`).
 
 Parity tests compare against MATLAB-generated reference fixtures. Those fixtures

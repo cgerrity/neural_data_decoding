@@ -2,7 +2,7 @@
 
 A self-contained snapshot of project state, conventions, and the next step.
 Intended for a fresh contributor (human or AI) picking up the work — read
-top-to-bottom, then start at "Next up". Last updated 2026-05-30.
+top-to-bottom, then start at "Next up". Last updated 2026-05-31.
 
 ## Where the project lives
 
@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **459 passed, 4 deselected** by default; **4 passed** under
+Expected: **470 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -83,7 +83,7 @@ neural_data_decoding/
 | 0 — Foundation | ✅ Complete | Stratification: element-for-element MATLAB |
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
-| C — Full Optimal VAE | 🚧 **Core + curriculum + two-stage + confidence routing + Eq. 2 interpolated CE complete**; MIL-in-training-path / accumulation table still pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; Eq. 2 CE analytical |
+| C — Full Optimal VAE | 🚧 **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL forward complete**; accumulation table still pending | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical |
 | CC — Extra-credit features | ⏳ Pending |  |
 | D — Cluster deployment | ⏳ Pending |  |
 
@@ -148,6 +148,27 @@ Milestone C status — what's done
   shows augmentation, weights, and freeze ticking as expected and
   the train loss collapsing right when the classifier unfreezes
   at epoch 11.
+- **MIL softmax pooling in variational forward path** (Milestone C #8) —
+  the kernel (`MILSoftmaxLayer`) was already 1e-6 parity-verified in
+  C #4; this milestone wired it into the loss orchestrator. New
+  `mil_multi_head_cross_entropy(logits_per_dim, targets, ...)` applies
+  joint softmax over `(T, K_d)` per dim → sum over T → marginal probs
+  → NLL on the target class's marginal. Mirrors MATLAB's pipeline
+  (`cgg_softmaxLayer('SCT')` followed by `Confidence_Aggregation =
+  sum(Y, [S, T])` from `cgg_getPredictionFromClassifierProbabilities.m`
+  line 163) — same math, but kept as a loss-side transformation in
+  Python (cleaner than baking the softmax into the classifier's last
+  layer). The existing `interpolated_multi_head_cross_entropy` gained
+  a `mil: bool = False` flag so MIL + confidence compose seamlessly:
+  with `mil=True`, the joint-softmax-and-aggregate happens first, then
+  the same closed-form interpolation `-log(c * p_target_marginal +
+  (1-c))` applies on the marginal. `train_one_epoch` + `validate`
+  thread a `mil_mode: bool` parameter; CLI routes from
+  `cfg.multiple_instance_learning_type == "MIL"`.
+  `C_optimal_synthetic.yaml` now enables both `confidence_type:
+  ['Trial', 'Task']` AND `multiple_instance_learning_type: "MIL"`;
+  smoke run completes 20 epochs end-to-end (final val_acc 0.41,
+  comparable scale on train/val loss in the 0.4-0.6 range).
 - **Confidence cleanup + validation interpolated CE** (Milestone C #7c) —
   (i) renamed `_branch_loss` → `_compute_confidence_stream_loss` and
   swept remaining "branch" references in docstrings/comments to "stream"
@@ -249,15 +270,7 @@ including confidence routing AND Eq. 2 interpolated CE. What remains
 is integration of features whose kernels exist but aren't yet woven
 into the variational forward path, plus hardware-aware tuning:
 
-### Option A — Milestone C #8: MIL softmax pooling in the variational forward path
-
-MIL softmax kernel exists and is parity-verified, but the variational
-classifier head currently emits per-timestep logits without the
-multi-axis pooling reduction. Wiring is similar to confidence: add a
-MIL-aware classifier head, smoke-test with
-`multiple_instance_learning_type: MIL`.
-
-### Option B — Hardware-aware accumulation table (Critical Note #18)
+### Option A — Hardware-aware accumulation table (Critical Note #18)
 
 The CLI ignores `cfg.accumulation_information`; current code always
 uses `mini_batch_size` for the actual forward batch size. MATLAB's
@@ -266,7 +279,7 @@ optimizer step when the device's `MaxBatchSize` is smaller than
 `MiniBatchSize`. Implement gradient accumulation that respects the
 hardware table.
 
-### Option C — start Milestone CC (extra-credit features) or D (cluster deployment)
+### Option B — start Milestone CC (extra-credit features) or D (cluster deployment)
 
 If the deferred Milestone C items aren't blocking real-data runs, jump
 ahead to:

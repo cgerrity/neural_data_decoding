@@ -45,6 +45,7 @@ from torch.utils.data import DataLoader
 from neural_data_decoding.models.composite import AutoencoderOutput, VariationalOutput
 from neural_data_decoding.training.losses.classification import (
     interpolated_multi_head_cross_entropy,
+    mil_multi_head_cross_entropy,
     multi_head_cross_entropy,
 )
 from neural_data_decoding.training.losses.confidence import (
@@ -102,6 +103,7 @@ def train_one_epoch(
     update_priors: bool = True,
     update_priors_strategy: Optional[Literal["every_iter", "first_iter_only", "never"]] = None,
     confidence_history: Optional[ConfidenceHistory] = None,
+    mil_mode: bool = False,
 ) -> tuple[EpochMetrics, Optional[LossPriors], Optional[ConfidenceHistory]]:
     """Run one supervised training epoch — Milestone A classifier path.
 
@@ -164,6 +166,13 @@ def train_one_epoch(
         / per-task / total confidence losses + the Beta P-controller
         update; the confidence loss is then folded into the aggregator
         as the ``confidence`` component scaled by the live ``Beta``.
+    mil_mode
+        When ``True`` (Milestone C #8), the classification cross-entropy
+        is computed via the MIL (Multiple Instance Learning) pipeline:
+        joint softmax over (T, K) per dim → sum over T → marginal probs
+        → NLL on the marginal. Combines correctly with confidence
+        interpolation when both are active. Driven by
+        ``cfg.multiple_instance_learning_type == "MIL"`` at the CLI layer.
 
     Returns
     -------
@@ -199,9 +208,17 @@ def train_one_epoch(
         # Detect variational composite vs classifier-only output.
         if isinstance(out, VariationalOutput):
             logits = out.logits
-            cls_loss = multi_head_cross_entropy(
-                logits, targets, class_weights_per_dim=class_weights_per_dim
-            )
+            # Initial classification loss: standard CE on logits, MIL CE
+            # on marginal probs, or interpolated variants (set below when
+            # confidence is active).
+            if mil_mode:
+                cls_loss = mil_multi_head_cross_entropy(
+                    logits, targets, class_weights_per_dim=class_weights_per_dim,
+                )
+            else:
+                cls_loss = multi_head_cross_entropy(
+                    logits, targets, class_weights_per_dim=class_weights_per_dim,
+                )
             recon_loss: Optional[torch.Tensor] = None
             kl_loss: Optional[torch.Tensor] = None
             if out.reconstruction is not None:
@@ -210,15 +227,14 @@ def train_one_epoch(
                 )
             kl_loss = kl_divergence_loss(out.mu, out.logvar, channel_dim=-1)
 
-            # Confidence (Milestone C #7 + #7b): if the model produces
+            # Confidence (Milestone C #7 + #7b + #8): if the model produces
             # trial or task confidence AND the caller threaded a
             # ConfidenceHistory state, advance the Beta P-controller,
-            # EMAs, and per-branch losses. The summed branch losses
+            # EMAs, and per-stream losses. The summed stream losses
             # become the confidence component; Beta scales it inside the
             # prior normalizer. The dropped per-dim total confidence
-            # additionally drives Eq. 2 interpolated CE on the
-            # classification loss (C #7b — replaces the standard CE
-            # computed above when confidence is active).
+            # additionally drives interpolated CE on the classification
+            # loss — MIL or standard depending on mil_mode.
             confidence_loss: Optional[torch.Tensor] = None
             confidence_beta_scalar: float = 1.0
             if confidence_history is not None and (
@@ -233,23 +249,19 @@ def train_one_epoch(
                     compute_interpolation=False,
                     loss_type="L1",
                 )
-                # Sum the three branch losses → single confidence component.
-                # Matches MATLAB cgg_getConfidenceLossInformation's
-                # Loss_Confidence = TrialConf + TaskConf + TotalConf summation.
                 confidence_loss = cb.total_loss + cb.trial_loss + cb.task_loss
                 confidence_beta_scalar = float(cb.updated_history.beta)
                 confidence_history = cb.updated_history
 
-                # Eq. 2 interpolated CE replaces the standard CE on raw
-                # logits. Matches MATLAB cgg_lossClassification's
-                # crossentropy(Y_interpolated, T) on the post-dropout
-                # interpolated probabilities. Uses the SAME dropped
-                # confidence the branch-loss path used (via cb.total_dropped),
-                # so dropout consistency is preserved per call.
+                # Interpolated CE (Eq. 2). Same kernel handles both MIL
+                # and non-MIL paths via the mil= flag — MIL applies the
+                # joint softmax + aggregation first, then interpolates
+                # on the marginal probs; non-MIL interpolates per-timestep.
                 if cb.total_dropped is not None:
                     cls_loss = interpolated_multi_head_cross_entropy(
                         logits, targets, cb.total_dropped,
                         class_weights_per_dim=class_weights_per_dim,
+                        mil=mil_mode,
                     )
 
             if loss_priors is not None:
@@ -310,6 +322,7 @@ def validate(
     loss_weights: Mapping[str, float],
     class_weights_per_dim: Optional[list[torch.Tensor]] = None,
     confidence_history: Optional[ConfidenceHistory] = None,
+    mil_mode: bool = False,
 ) -> EpochMetrics:
     """Run one validation pass — no gradients, no BN updates (Critical Note #34).
 
@@ -356,9 +369,14 @@ def validate(
         # Detect variational vs classifier-only output (same logic as train).
         if isinstance(out, VariationalOutput):
             logits = out.logits
-            cls_loss = multi_head_cross_entropy(
-                logits, targets, class_weights_per_dim=class_weights_per_dim
-            )
+            if mil_mode:
+                cls_loss = mil_multi_head_cross_entropy(
+                    logits, targets, class_weights_per_dim=class_weights_per_dim,
+                )
+            else:
+                cls_loss = multi_head_cross_entropy(
+                    logits, targets, class_weights_per_dim=class_weights_per_dim,
+                )
             recon_loss = None
             if out.reconstruction is not None:
                 recon_loss = masked_mse_reconstruction_loss(
@@ -388,6 +406,7 @@ def validate(
                     cls_loss = interpolated_multi_head_cross_entropy(
                         logits, targets, cb_val.total_dropped,
                         class_weights_per_dim=class_weights_per_dim,
+                        mil=mil_mode,
                     )
 
             total_loss, _ = aggregate_total_loss(

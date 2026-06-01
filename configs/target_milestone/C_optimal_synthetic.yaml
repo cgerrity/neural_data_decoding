@@ -43,12 +43,15 @@ classifier_dropout: 0.5
 want_normalization: false
 activation: ""
 
-# ───────────────────────── Confidence enabled (Milestone C #7); MIL deferred ─────────────────────────
+# ───────────────────────── Confidence (C #7) + MIL (C #8) both enabled ─────────────────────────
 # Trial + Task confidence heads grafted onto the variational composite;
 # Beta P-controller adjusts the confidence-loss contribution per batch
-# based on the running mean TotalConfidence (target = 0.5).
+# based on the running mean TotalConfidence (target = 0.5). MIL mode
+# replaces per-timestep CE with a joint softmax over (T, K) → temporal
+# aggregation → NLL on the per-trial marginal. The two combine via the
+# mil=True flag on interpolated_multi_head_cross_entropy.
 confidence_type: ["Trial", "Task"]
-multiple_instance_learning_type: "None"
+multiple_instance_learning_type: "MIL"
 want_batch_correction: false
 
 # ───────────────────────── Loss weights ─────────────────────────
