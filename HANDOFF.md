@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **675 passed, 4 deselected** by default; **4 passed** under
+Expected: **680 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -508,7 +508,8 @@ work order; the canonical mapping is:
   `ModelName='PCA'` registered via `register_encoder`. 19 unit tests;
   smoke run with `model_name: PCA` reaches val_acc 0.42 across 3
   synthetic epochs.
-* ~~**CC.6 — Learnable offset/scale augmentation**~~ ✅ done. New
+* ~~**CC.6 — Learnable offset/scale augmentation**~~ ✅ done
+  (kernel + module + composite wiring). New
   `training/losses/offset_and_scale.py` ports
   `cgg_lossOffsetAndScale.m`: `offset_and_scale_targets(x)` computes
   the MATLAB targets (`T_Scale=range(x)-1, T_Offset=median(x)` for
@@ -523,12 +524,20 @@ work order; the canonical mapping is:
   `models/layers/offset_scale.py` provides `LearnableOffsetScale`
   (two parallel FC heads producing `(Y_Scale, Y_Offset)` from latent
   `z`) and `find_learnable_offset_scale` for the auto-activation
-  pattern from Critical Note #32 — the loss orchestrator inspects
-  the decoder via `isinstance` and skips the loss term when no
-  augmentation head is present. 16 unit tests cover targets,
+  pattern from Critical Note #32. Composite integration: both
+  `VariationalComposite` and `VariationalAutoencoder` gained a
+  `learnable_offset_scale` slot, forward emits
+  `output.offset_scale = (Y_Scale, Y_Offset)` when wired (else
+  `None`), `copy_autoencoder_weights` propagates the head across
+  the Stage 1 → Stage 2 handoff, and the builders read
+  `cfg.want_learnable_offset` / `cfg.want_learnable_scale` to wire
+  the head. The training loop computes `offset_and_scale_loss` when
+  `output.offset_scale is not None` (loss aggregator already had a
+  slot for this from earlier work). 21 unit tests cover targets,
   loss kernel (zero-when-equal, positive-otherwise, batch-norm,
-  NaN mask, gradient flow), the decoder block, and the
-  auto-activation helper.
+  NaN mask, gradient flow), the decoder block, the auto-activation
+  helper, composite + autoencoder forward, and the Stage 1 → 2
+  handoff.
 * ~~**CC.7 — `WeightedLoss=''` unweighted path**~~ ✅ done. The
   Python path was already functionally there:
   ``multi_head_cross_entropy`` accepts ``class_weights_per_dim=None``

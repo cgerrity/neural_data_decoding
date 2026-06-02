@@ -189,3 +189,96 @@ def test_find_learnable_offset_scale_returns_none_when_absent() -> None:
     import torch.nn as nn
     composite = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 4))
     assert find_learnable_offset_scale(composite) is None
+
+
+# ───────────────────────── Composite integration (CC.6 Phase B) ─────────────────────────
+
+
+def _aug_cfg(*, want_off: bool = True, want_scale: bool = True) -> dict:
+    return {
+        "in_features": 4,
+        "samples_per_window": 4,
+        "num_areas": 2,
+        "hidden_sizes": [16, 4],
+        "num_classes_per_dim": [3],
+        "classifier_hidden_size": [8, 4],
+        "transform": "GRU",
+        "loss_type_decoder": "MSE",
+        "want_learnable_offset": want_off,
+        "want_learnable_scale": want_scale,
+    }
+
+
+def test_composite_with_offset_scale_emits_pair_in_output() -> None:
+    """``cfg.want_learnable_*`` wires the augmentation head; forward returns ``offset_scale``."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    composite = build_variational_composite(_aug_cfg())
+    composite.eval()
+    out = composite(torch.randn(2, 5, 4, 2, 4))
+    assert out.offset_scale is not None
+    y_scale, y_offset = out.offset_scale
+    assert y_scale.shape == (2, 5, 4, 2)
+    assert y_offset.shape == (2, 5, 4, 2)
+
+
+def test_composite_without_augment_flags_leaves_offset_scale_none() -> None:
+    """Default cfg (no augment flags) → composite.forward.offset_scale is None."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    cfg = _aug_cfg(want_off=False, want_scale=False)
+    composite = build_variational_composite(cfg)
+    composite.eval()
+    out = composite(torch.randn(2, 5, 4, 2, 4))
+    assert out.offset_scale is None
+    assert composite.learnable_offset_scale is None
+
+
+def test_autoencoder_with_offset_scale_emits_pair() -> None:
+    """Stage 1 :class:`VariationalAutoencoder` also wires augment head when requested."""
+    from neural_data_decoding.models.composite import build_variational_autoencoder
+    ae = build_variational_autoencoder(_aug_cfg())
+    ae.eval()
+    out = ae(torch.randn(2, 5, 4, 2, 4))
+    assert out.offset_scale is not None
+
+
+def test_copy_autoencoder_weights_copies_offset_scale_head() -> None:
+    """Stage 1 → Stage 2 handoff transfers augmentation head weights."""
+    from neural_data_decoding.models.composite import (
+        build_variational_autoencoder,
+        build_variational_composite,
+        copy_autoencoder_weights,
+    )
+    cfg = _aug_cfg()
+    src = build_variational_autoencoder(cfg)
+    dst = build_variational_composite(cfg)
+
+    assert src.learnable_offset_scale is not None
+    assert dst.learnable_offset_scale is not None
+    # Mutate src to known values; verify dst picks them up on handoff.
+    with torch.no_grad():
+        for p in src.learnable_offset_scale.parameters():
+            p.fill_(0.123)
+    copy_autoencoder_weights(src, dst)
+    for p_src, p_dst in zip(
+        src.learnable_offset_scale.parameters(),
+        dst.learnable_offset_scale.parameters(),
+    ):
+        assert torch.equal(p_dst, p_src)
+
+
+def test_composite_aug_gradient_flows_through_head() -> None:
+    """Backprop on the augmentation loss flows gradients into the head's parameters."""
+    from neural_data_decoding.models.composite import build_variational_composite
+    composite = build_variational_composite(_aug_cfg())
+    x = torch.randn(2, 5, 4, 2, 4)
+    out = composite(x)
+    assert out.offset_scale is not None
+    y_scale, y_offset = out.offset_scale
+    loss = offset_and_scale_loss(x, y_scale, y_offset)
+    loss.backward()
+    assert composite.learnable_offset_scale is not None
+    n_with_grad = sum(
+        1 for p in composite.learnable_offset_scale.parameters()
+        if p.grad is not None and p.grad.abs().sum() > 0
+    )
+    assert n_with_grad > 0

@@ -166,6 +166,14 @@ class VariationalOutput:
         Per-output-dim confidence ``(batch, time, num_dims)`` from
         :class:`~neural_data_decoding.models.confidence_heads.TaskConfidenceHead`.
         ``None`` when no Task head is configured.
+    offset_scale
+        ``(Y_Scale, Y_Offset)`` per-window-reduced augmentation
+        estimates from
+        :class:`~neural_data_decoding.models.layers.offset_scale.LearnableOffsetScale`
+        when present in the composite. ``None`` when no augmentation
+        head is wired (the active production configs leave
+        ``WeightOffsetAndScale=0`` — the head is optional, gated by
+        Critical Note #32's decoder-topology auto-activation).
     """
 
     logits: list[torch.Tensor]
@@ -174,6 +182,7 @@ class VariationalOutput:
     logvar: torch.Tensor
     trial_confidence: Optional[torch.Tensor] = None
     task_confidence: Optional[torch.Tensor] = None
+    offset_scale: Optional[tuple[torch.Tensor, torch.Tensor]] = None
 
 
 class VariationalComposite(nn.Module):
@@ -245,6 +254,7 @@ class VariationalComposite(nn.Module):
         task_confidence_head: Optional[TaskConfidenceHead] = None,
         pre_encoder: Optional[nn.Module] = None,
         post_decoder: Optional[nn.Module] = None,
+        learnable_offset_scale: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
         self.nan_to_zero = nan_to_zero if nan_to_zero is not None else NaNToZero()
@@ -271,6 +281,11 @@ class VariationalComposite(nn.Module):
         self.classifier = classifier
         self.trial_confidence_head = trial_confidence_head
         self.task_confidence_head = task_confidence_head
+        # CC.6: optional augmentation head; auto-activated via Critical
+        # Note #32's decoder-topology pattern. The training loop should
+        # invoke offset_and_scale_loss when ``offset_scale`` is non-None
+        # in the forward output.
+        self.learnable_offset_scale = learnable_offset_scale
         self.has_reconstruction = not isinstance(decoder, NoopDecoder)
         # Task confidence requires the classifier to expose penultimate
         # features. DeepLSTMClassifier does; MultiHeadClassifier does not.
@@ -347,11 +362,19 @@ class VariationalComposite(nn.Module):
         if self.trial_confidence_head is not None:
             trial_confidence = self.trial_confidence_head(z)
 
+        # CC.6 — augmentation head (auto-activated by topology per
+        # Critical Note #32). When present, produce (Y_Scale, Y_Offset)
+        # so the training loop can compute offset_and_scale_loss.
+        offset_scale: Optional[tuple[torch.Tensor, torch.Tensor]] = None
+        if self.learnable_offset_scale is not None:
+            offset_scale = self.learnable_offset_scale(z)
+
         return VariationalOutput(
             logits=logits, reconstruction=reconstruction,
             mu=mu, logvar=logvar,
             trial_confidence=trial_confidence,
             task_confidence=task_confidence,
+            offset_scale=offset_scale,
         )
 
 
@@ -435,6 +458,24 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
             in_features_per_dim=[last_hidden] * len(num_classes_per_dim),
         )
 
+    # CC.6: optional augmentation head — gated by want_learnable_offset
+    # or want_learnable_scale; auto-activated by composite topology
+    # downstream (Critical Note #32). When either flag is True, build
+    # the LearnableOffsetScale head; the training loop should compute
+    # offset_and_scale_loss when the head produces output.
+    learnable_offset_scale: Optional[nn.Module] = None
+    if bool(cfg.get("want_learnable_offset", False)) or bool(
+        cfg.get("want_learnable_scale", False),
+    ):
+        from neural_data_decoding.models.layers.offset_scale import (
+            LearnableOffsetScale,
+        )
+        learnable_offset_scale = LearnableOffsetScale(
+            latent_dim=latent,
+            samples_per_window=samples_per_window,
+            num_areas=num_areas,
+        )
+
     return VariationalComposite(
         encoder=encoder,
         bottleneck=bottleneck,
@@ -448,6 +489,7 @@ def build_variational_composite(cfg: Mapping[str, Any]) -> VariationalComposite:
         task_confidence_head=task_head,
         pre_encoder=pre_encoder,
         post_decoder=post_decoder,
+        learnable_offset_scale=learnable_offset_scale,
     )
 
 
@@ -486,11 +528,16 @@ class AutoencoderOutput:
         Latent mean from the sampling layer.
     logvar
         Latent log-variance from the sampling layer.
+    offset_scale
+        Optional ``(Y_Scale, Y_Offset)`` from a
+        :class:`~neural_data_decoding.models.layers.offset_scale.LearnableOffsetScale`
+        augmentation head (CC.6). ``None`` when no head is wired.
     """
 
     reconstruction: torch.Tensor
     mu: torch.Tensor
     logvar: torch.Tensor
+    offset_scale: Optional[tuple[torch.Tensor, torch.Tensor]] = None
 
 
 class VariationalAutoencoder(nn.Module):
@@ -535,6 +582,7 @@ class VariationalAutoencoder(nn.Module):
         nan_to_zero: Optional[NaNToZero] = None,
         pre_encoder: Optional[nn.Module] = None,
         post_decoder: Optional[nn.Module] = None,
+        learnable_offset_scale: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
         self.nan_to_zero = nan_to_zero if nan_to_zero is not None else NaNToZero()
@@ -554,6 +602,10 @@ class VariationalAutoencoder(nn.Module):
         self.sampling = sampling
         self.decoder = decoder
         self.post_decoder = post_decoder
+        # CC.6: optional augmentation head for Stage 1 too (rarely
+        # used since active configs leave WeightOffsetAndScale=0 in
+        # Stage 1, but symmetric with VariationalComposite).
+        self.learnable_offset_scale = learnable_offset_scale
 
     def forward(self, x: torch.Tensor) -> AutoencoderOutput:
         """Run the Stage 1 forward pass: encode → sample → decode."""
@@ -570,7 +622,13 @@ class VariationalAutoencoder(nn.Module):
         reconstruction = self.unflatten(rec)
         if reconstruction.ndim == 5 and x.ndim == 5:
             reconstruction = _match_shape_5d(reconstruction, x)
-        return AutoencoderOutput(reconstruction=reconstruction, mu=mu, logvar=logvar)
+        offset_scale: Optional[tuple[torch.Tensor, torch.Tensor]] = None
+        if self.learnable_offset_scale is not None:
+            offset_scale = self.learnable_offset_scale(z)
+        return AutoencoderOutput(
+            reconstruction=reconstruction, mu=mu, logvar=logvar,
+            offset_scale=offset_scale,
+        )
 
 
 def build_variational_autoencoder(cfg: Mapping[str, Any]) -> VariationalAutoencoder:
@@ -605,12 +663,25 @@ def build_variational_autoencoder(cfg: Mapping[str, Any]) -> VariationalAutoenco
             "produced a NoopDecoder. Either enable reconstruction or "
             "skip Stage 1 by setting num_epochs_autoencoder=0."
         )
+    learnable_offset_scale: Optional[nn.Module] = None
+    if bool(cfg.get("want_learnable_offset", False)) or bool(
+        cfg.get("want_learnable_scale", False),
+    ):
+        from neural_data_decoding.models.layers.offset_scale import (
+            LearnableOffsetScale,
+        )
+        learnable_offset_scale = LearnableOffsetScale(
+            latent_dim=int(cfg["hidden_sizes"][-1]),
+            samples_per_window=int(cfg.get("samples_per_window", 1)),
+            num_areas=int(cfg.get("num_areas", 1)),
+        )
     return VariationalAutoencoder(
         encoder=encoder, bottleneck=bottleneck, sampling=sampling, decoder=decoder,
         samples_per_window=int(cfg.get("samples_per_window", 1)),
         num_areas=int(cfg.get("num_areas", 1)),
         in_features=int(cfg["in_features"]),
         pre_encoder=pre_encoder, post_decoder=post_decoder,
+        learnable_offset_scale=learnable_offset_scale,
     )
 
 
@@ -642,6 +713,16 @@ def copy_autoencoder_weights(
         dst.pre_encoder.load_state_dict(src.pre_encoder.state_dict())
     if src.post_decoder is not None and dst.post_decoder is not None:
         dst.post_decoder.load_state_dict(src.post_decoder.state_dict())
+    # CC.6: hand off the augmentation head's weights too when both
+    # sides have one (handoff is symmetric — both should be built
+    # from the same cfg).
+    if (
+        src.learnable_offset_scale is not None
+        and dst.learnable_offset_scale is not None
+    ):
+        dst.learnable_offset_scale.load_state_dict(
+            src.learnable_offset_scale.state_dict(),
+        )
     # nan_to_zero is stateless (no learnables) — nothing to copy.
 
 

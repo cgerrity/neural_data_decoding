@@ -242,6 +242,12 @@ class _DefaultStitchingFusionBridge(nn.Module):
         )
 
     def _ensure_linear(self, flat_dim: int, device: torch.device) -> nn.Linear:
+        """Lazily build the boundary ``Linear`` projection once ``flat_dim`` is known.
+
+        The conv coder's output dim depends on the input time length,
+        so the encoder-side ``Linear`` can't be sized at construction.
+        Called from forward() the first time the shape is observed.
+        """
         if self._linear is None or self._linear.in_features != flat_dim:
             if self.mode == "Encoder":
                 self._linear = nn.Linear(flat_dim, self.cross_area_fusion_size).to(device)
@@ -335,6 +341,7 @@ class _GeminiStitchingFusionBridge(nn.Module):
         self._linear: Optional[nn.Linear] = None
 
     def _ensure_linear(self, flat_dim: int, device: torch.device) -> nn.Linear:
+        """Lazily build the boundary ``Linear`` once the Gemini output flat-dim is known."""
         if self._linear is None or (
             self._linear.in_features != (
                 self.cross_area_fusion_size if self.mode == "Decoder" else flat_dim
@@ -348,6 +355,7 @@ class _GeminiStitchingFusionBridge(nn.Module):
         return self._linear
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Encoder: 5-D Gemini → 3-D ``Linear``. Decoder: 3-D ``Linear`` → reshape → 5-D Gemini."""
         if self.mode == "Encoder":
             if x.ndim != 5:
                 raise ValueError(

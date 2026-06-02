@@ -228,6 +228,7 @@ class PCADecodingLayer(nn.Module):
 
     @property
     def is_fitted(self) -> bool:
+        """``True`` after ``components`` and ``mean`` buffers are populated."""
         return self._fitted
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
@@ -357,6 +358,7 @@ class PCAEncoder(nn.Module):
 
     @property
     def is_fitted(self) -> bool:
+        """``True`` once :meth:`fit` (or :meth:`fit_from_dataloader`) has been called."""
         return self.pca.is_fitted
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

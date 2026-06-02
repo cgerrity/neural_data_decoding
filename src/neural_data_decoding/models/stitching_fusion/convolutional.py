@@ -240,6 +240,7 @@ class _ConvLevel(nn.Module):
             self.act_final = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run the level's conv blocks and add the ResNet residual if enabled."""
         identity = x
         out = x
         for blk in self.blocks:

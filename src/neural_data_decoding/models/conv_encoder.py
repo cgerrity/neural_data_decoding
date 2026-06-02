@@ -278,6 +278,7 @@ class MultiFilterConvolutionalEncoder(nn.Module):
         self.out_features = self._compute_out_features()
 
     def _compute_out_features(self) -> int:
+        """Dry-run the Gemini module on a unit tensor to learn the flat output dim."""
         dummy = torch.zeros(
             1, 1,
             self.samples_per_window, self.num_areas, self.channels_per_area,
@@ -287,6 +288,7 @@ class MultiFilterConvolutionalEncoder(nn.Module):
         return int(y.shape[2] * y.shape[3] * y.shape[4])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """``(B, W, T*A*C) → (B, W, F_out)`` via reshape → Gemini multi-scale → reshape."""
         if x.ndim != 3:
             raise ValueError(
                 f"MultiFilterConvolutionalEncoder expects 3-D input "

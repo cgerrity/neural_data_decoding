@@ -164,6 +164,7 @@ class _TemporalBranch(nn.Module):
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run the branch body and optional extra-reduce conv."""
         y = self.body(x)
         if self.extra is not None:
             y = self.extra(y)
@@ -225,6 +226,7 @@ class _TemporalBranchTransposed(nn.Module):
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run the transposed-conv branch body + optional extra-expand."""
         y = self.body(x)
         if self.extra is not None:
             y = self.extra(y)
@@ -307,6 +309,7 @@ class GeminiStitchingFusionModule(nn.Module):
     # ───────────── Encoder build ─────────────
 
     def _build_encoder(self) -> None:
+        """Construct the encoder's temporal branches + bypass + spatial + area fusion."""
         spatial_reduce, temporal_reduce = self.encoder_reduction
         # 1. Temporal extraction — parallel branches.
         self.temporal_branches = nn.ModuleList()
@@ -412,6 +415,7 @@ class GeminiStitchingFusionModule(nn.Module):
     # ───────────── Decoder build ─────────────
 
     def _build_decoder(self) -> None:
+        """Construct the decoder's de-fusion expansion + temporal branches + bypass + final reduction."""
         spatial_reduce, temporal_reduce = self.encoder_reduction
         cascade_expand = (
             temporal_reduce ** self.num_cascade_layers
@@ -528,11 +532,13 @@ class GeminiStitchingFusionModule(nn.Module):
         return z2.permute(0, 1, 4, 2, 3).contiguous()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Dispatch to the encoder or decoder forward depending on ``self.mode``."""
         if self.mode == "Encoder":
             return self._forward_encoder(x)
         return self._forward_decoder(x)
 
     def _forward_encoder(self, x: torch.Tensor) -> torch.Tensor:
+        """Encoder pass: temporal branches + bypass + addition → spatial → area fusion."""
         if x.ndim != 5:
             raise ValueError(
                 f"GeminiStitchingFusionModule expects 5-D input "
@@ -582,6 +588,7 @@ class GeminiStitchingFusionModule(nn.Module):
         return self._from_conv_layout(fused, b, w)
 
     def _forward_decoder(self, x: torch.Tensor) -> torch.Tensor:
+        """Decoder pass: de-fusion expansion + spatial trans + temporal branches + bypass + final reduction."""
         if x.ndim != 5:
             raise ValueError(
                 f"GeminiStitchingFusionModule expects 5-D input "
