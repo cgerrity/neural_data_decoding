@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **635 passed, 4 deselected** by default; **4 passed** under
+Expected: **651 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -84,7 +84,7 @@ neural_data_decoding/
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
-| CC — Extra-credit features | 🚧 6 of 8 done — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.7 (unweighted loss); CC.6 (learnable offset/scale), CC.8 (full SLURM sweep coverage) pending | All 7 SLURM-sweep `ModelName` strings (Logistic Regression / Feedforward / GRU / LSTM / Convolutional / Resnet / Multi-Filter Convolutional) plus `PCA` are now buildable via the encoder registry |
+| CC — Extra-credit features | 🚧 7 of 8 done — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.6 (offset/scale augmentation) + CC.7 (unweighted loss); CC.8 (full SLURM sweep coverage) pending | All 7 SLURM-sweep `ModelName` strings + PCA buildable via encoder registry; offset/scale loss + decoder block ported with MATLAB-parity median via torch.quantile |
 | D — Cluster deployment | ⏳ Pending |  |
 
 Milestone C status — what's done
@@ -508,11 +508,27 @@ work order; the canonical mapping is:
   `ModelName='PCA'` registered via `register_encoder`. 19 unit tests;
   smoke run with `model_name: PCA` reaches val_acc 0.42 across 3
   synthetic epochs.
-* **CC.6 — Learnable offset/scale augmentation** — port
-  `cgg_lossOffsetAndScale.m` augmentation loss + the corresponding
-  decoder-side learnable augmentation block (gated by
-  `WantLearnableOffset` / `WantLearnableScale`; auto-activated by
-  decoder graph topology per Critical Note #32).
+* ~~**CC.6 — Learnable offset/scale augmentation**~~ ✅ done. New
+  `training/losses/offset_and_scale.py` ports
+  `cgg_lossOffsetAndScale.m`: `offset_and_scale_targets(x)` computes
+  the MATLAB targets (`T_Scale=range(x)-1, T_Offset=median(x)` for
+  the default `'mX+b+X'` equation) by reducing over the per-area
+  channel axis. `offset_and_scale_loss(x, y_scale, y_offset)`
+  combines `0.5 * l2loss(Y_Scale, T_Scale, Mask=Mask_NaN) + 0.5 *
+  l2loss(Y_Offset, T_Offset, Mask=Mask_NaN)` with the same batch-
+  size normalization as the ELBO (Critical Note #38). Uses
+  `torch.quantile(0.5)` instead of `torch.median` because PyTorch's
+  median returns the lower-middle value for even lengths whereas
+  MATLAB averages — `torch.quantile` matches MATLAB. New
+  `models/layers/offset_scale.py` provides `LearnableOffsetScale`
+  (two parallel FC heads producing `(Y_Scale, Y_Offset)` from latent
+  `z`) and `find_learnable_offset_scale` for the auto-activation
+  pattern from Critical Note #32 — the loss orchestrator inspects
+  the decoder via `isinstance` and skips the loss term when no
+  augmentation head is present. 16 unit tests cover targets,
+  loss kernel (zero-when-equal, positive-otherwise, batch-norm,
+  NaN mask, gradient flow), the decoder block, and the
+  auto-activation helper.
 * ~~**CC.7 — `WeightedLoss=''` unweighted path**~~ ✅ done. The
   Python path was already functionally there:
   ``multi_head_cross_entropy`` accepts ``class_weights_per_dim=None``
