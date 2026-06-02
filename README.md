@@ -151,7 +151,7 @@ are gitignored — regenerate them locally with the MATLAB-batch scripts in
 | A — Logistic tracer | ✅ Complete |
 | B — GRU + Classifier | ✅ Complete (T2 single-step parity verified) |
 | C — Full Optimal | ✅ Complete (VAE / ELBO / confidence / MIL / curriculum / two-stage / accumulation) |
-| CC — Extra-credit features | 🚧 4 of 8 done — CC.1 (Conv/Resnet/Multi-Filter encoders + spec registry), CC.3 (MAE), CC.4 (SGDM), CC.5 (S&F all 5 variants); CC.2 (PCA), CC.6 (learnable offset/scale), CC.7 (unweighted loss), CC.8 (full SLURM sweep coverage) pending |
+| CC — Extra-credit features | ✅ Complete (CC.1 architecture registry + Conv/Resnet/Multi-Filter encoders, CC.2 PCA, CC.3 MAE, CC.4 SGDM, CC.5 all 5 S&F variants, CC.6 offset/scale augmentation, CC.7 unweighted loss, CC.8 SLURM sweep coverage + 24 integration tests) |
 | D — Cluster deployment | ⏳ Pending |
 | E — Educational curriculum | ⏳ Directory scaffold only (0 of ~55 notebooks authored) |
 | F — Reference documentation | 🚧 ~6 concept pages + ~4 cookbook entries authored; Sphinx API stub exists; full curriculum coverage pending |

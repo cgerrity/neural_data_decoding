@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **651 passed, 4 deselected** by default; **4 passed** under
+Expected: **675 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -84,7 +84,7 @@ neural_data_decoding/
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
-| CC — Extra-credit features | 🚧 7 of 8 done — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.6 (offset/scale augmentation) + CC.7 (unweighted loss); CC.8 (full SLURM sweep coverage) pending | All 7 SLURM-sweep `ModelName` strings + PCA buildable via encoder registry; offset/scale loss + decoder block ported with MATLAB-parity median via torch.quantile |
+| CC — Extra-credit features | ✅ **all 8 sub-milestones done** — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.6 (offset/scale augmentation) + CC.7 (unweighted loss) + CC.8 (SLURM sweep coverage audit + 24 integration tests) | See `sweeps/parameter_coverage.py` for the full 47-variable support matrix |
 | D — Cluster deployment | ⏳ Pending |  |
 
 Milestone C status — what's done
@@ -537,9 +537,16 @@ work order; the canonical mapping is:
   ``otherwise → Weights = cell(0)`` branch. CC.7 added explicit
   regression tests pinning the unweighted path + the inverse-weighted
   divergence on imbalanced data.
-* **CC.8 — Full SLURM sweep parameter coverage** — audit
-  `SLURMPARAMETERS_cgg_runAutoEncoder_v2.m`'s 47-dim sweep; add
-  non-crash integration tests for representative slices.
+* ~~**CC.8 — Full SLURM sweep parameter coverage**~~ ✅ done. New
+  `sweeps/parameter_coverage.py` documents the 47-variable support
+  matrix (40 fully supported, 6 partial / never-exercised, 1 N/A).
+  New `tests/integration/test_slurm_sweep_coverage.py` adds 24
+  parametrized non-crash integration tests covering each
+  registered ModelName (7), each ClassifierName (3), MSE/MAE loss,
+  S&F variants (Feedforward / Default / 3 Gemini), ADAM/SGDM
+  optimizers, and the WeightedLoss = Inverse / '' / 'None' branches.
+  Tests live in `tests/integration/` and run in the default suite
+  (~3s total).
 
 Other untracked items mentioned in passing:
 * **Data restructure to (W, T, A, C)** ✅ landed alongside CC.5 (the

@@ -58,16 +58,17 @@ the MATLAB sources are referenced for parity testing only.
 - Milestone C is fully complete (variational core, curriculum, two-stage,
   confidence + Eq. 2 CE, MIL forward, hardware-aware gradient
   accumulation, aggregate prediction column).
-- **Milestone CC is partial — 3 of 8 sub-milestones done** (CC.3 MAE,
-  CC.4 SGDM, CC.5 Stitching+Fusion with all 5 variants). Data layout
-  also restructured to `(W, T, A, C)` matching MATLAB's
-  `InputSize=[C, T, A]` + W. Pending CC items: CC.1 (Conv/ResNet
-  registry, 25+ variants), CC.2 (PCA backbone), CC.6 (learnable
-  offset/scale augmentation), CC.7 (`WeightedLoss=''` unweighted
-  path), CC.8 (full SLURM sweep parameter coverage). See
-  `HANDOFF.md` "Next up" for full descriptions and CC-numbering
-  mapping vs. past commit labels.
-- **Next step is to finish CC or jump to D** (cluster deployment).
+- **Milestone CC is fully complete** — all 8 sub-milestones done:
+  CC.1 (Conv/Resnet/Multi-Filter encoders + architecture spec
+  registry), CC.2 (PCA backbone), CC.3 (MAE), CC.4 (SGDM), CC.5
+  (Stitching+Fusion all 5 variants), CC.6 (learnable offset/scale
+  augmentation), CC.7 (`WeightedLoss=''` unweighted path),
+  CC.8 (SLURM sweep coverage audit + 24 integration tests). Data
+  layout also restructured to `(W, T, A, C)` matching MATLAB's
+  `InputSize=[C, T, A]` + W.
+- **Next step is Milestone D (cluster deployment)** or the
+  educational notebooks (Milestone E, currently 0% authored) and
+  full reference documentation (Milestone F, partially authored).
 
 ## Conventions to follow
 
