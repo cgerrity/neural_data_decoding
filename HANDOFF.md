@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **614 passed, 4 deselected** by default; **4 passed** under
+Expected: **635 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -84,7 +84,7 @@ neural_data_decoding/
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
-| CC — Extra-credit features | 🚧 4 of 8 done — CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + **CC.1 (Conv/Resnet/Multi-Filter encoders + arch registry)**; CC.2 (PCA), CC.6 (learnable offset/scale), CC.7 (unweighted loss), CC.8 (full SLURM sweep coverage) pending | All 7 SLURM-sweep ``ModelName`` strings (Logistic Regression / Feedforward / GRU / LSTM / Convolutional / Resnet / Multi-Filter Convolutional) buildable via the encoder registry — except ``'PCA'`` which is registered as a spec but its builder awaits CC.2 |
+| CC — Extra-credit features | 🚧 6 of 8 done — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.7 (unweighted loss); CC.6 (learnable offset/scale), CC.8 (full SLURM sweep coverage) pending | All 7 SLURM-sweep `ModelName` strings (Logistic Regression / Feedforward / GRU / LSTM / Convolutional / Resnet / Multi-Filter Convolutional) plus `PCA` are now buildable via the encoder registry |
 | D — Cluster deployment | ⏳ Pending |  |
 
 Milestone C status — what's done
@@ -496,17 +496,31 @@ work order; the canonical mapping is:
     ``PARAMETERS_cgg_constructNetworkArchitecture.m`` not in the
     SLURM sweep are parameter combinations of the same builders;
     add to the registry as needed.
-* **CC.2 — PCA backbone** — frozen PCA encode/decode in
-  `models/layers/pca.py`, pre-compute components per fold via
-  `sklearn.decomposition.PCA`, inject as `nn.Linear` with
-  `requires_grad=False`.
+* ~~**CC.2 — PCA backbone**~~ ✅ done. New `models/layers/pca.py`
+  provides `PCAEncodingLayer` / `PCADecodingLayer` (paired modules
+  holding `components` and `mean` as buffers — no learnable params)
+  plus a registry-facing `PCAEncoder` adapter and
+  `fit_pca_encoder_decoder` helper. CLI's `_fit_pca_if_present` walks
+  the model after construction and fits any PCA encoder on the
+  training loader before the optimizer is built. Mirrors
+  `cgg_PCAEncodingLayer.m` semantics: `z = (x - mean) @ components.T`
+  with sklearn's `PCA(n_components=...)` providing the components.
+  `ModelName='PCA'` registered via `register_encoder`. 19 unit tests;
+  smoke run with `model_name: PCA` reaches val_acc 0.42 across 3
+  synthetic epochs.
 * **CC.6 — Learnable offset/scale augmentation** — port
   `cgg_lossOffsetAndScale.m` augmentation loss + the corresponding
   decoder-side learnable augmentation block (gated by
   `WantLearnableOffset` / `WantLearnableScale`; auto-activated by
   decoder graph topology per Critical Note #32).
-* **CC.7 — `WeightedLoss=''` unweighted path** — disabled-class-
-  weighting branch as a config-selectable alternative to `'Inverse'`.
+* ~~**CC.7 — `WeightedLoss=''` unweighted path**~~ ✅ done. The
+  Python path was already functionally there:
+  ``multi_head_cross_entropy`` accepts ``class_weights_per_dim=None``
+  and CLI passes ``None`` whenever ``cfg.weighted_loss != 'inverse'``,
+  mapping to MATLAB ``cgg_getWeightsForLoss.m`` lines 8-14's
+  ``otherwise → Weights = cell(0)`` branch. CC.7 added explicit
+  regression tests pinning the unweighted path + the inverse-weighted
+  divergence on imbalanced data.
 * **CC.8 — Full SLURM sweep parameter coverage** — audit
   `SLURMPARAMETERS_cgg_runAutoEncoder_v2.m`'s 47-dim sweep; add
   non-crash integration tests for representative slices.

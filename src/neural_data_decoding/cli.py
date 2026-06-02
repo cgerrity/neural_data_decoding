@@ -227,6 +227,11 @@ def _cmd_train(args: argparse.Namespace) -> int:
         in_features=num_features,
         num_classes_per_dim=num_classes_per_dim,
     )
+    # CC.2 — fit the PCA encoder on training data before the optimizer
+    # is built, since PCA holds buffers (not parameters) and the
+    # optimizer would otherwise have nothing to do on the frozen
+    # transform. The fit method walks the train_loader once.
+    _fit_pca_if_present(model, train_loader)
     # Optimizer: when a freeze schedule is active, build per-module param
     # groups so apply_freeze_to_optimizer can scale each network's lr
     # independently (mirrors MATLAB setLearnRateFactor per submodule).
@@ -598,6 +603,24 @@ def _build_model(
     return EncoderClassifierComposite(
         encoder=encoder, bottleneck=bottleneck, classifier=classifier
     )
+
+
+def _fit_pca_if_present(model: torch.nn.Module, train_loader: DataLoader) -> None:
+    """Walk the model and fit any :class:`PCAEncoder` on training data.
+
+    PCA encoders (CC.2) hold frozen components — they need to be fit
+    once from the training set before any forward pass. This helper
+    locates the PCA encoder (if any) anywhere in the model tree and
+    calls ``fit_from_dataloader`` on the training loader.
+
+    No-op when the model has no PCA encoder.
+    """
+    from .models.layers.pca import PCAEncoder
+    for module in model.modules():
+        if isinstance(module, PCAEncoder) and not module.is_fitted:
+            print("  ↳ Fitting PCA encoder on training data...")
+            module.fit_from_dataloader(train_loader)
+            print(f"  ↳ PCA fit complete (out_features={module.out_features}).")
 
 
 def _resolve_result_dir(cfg: DictConfig, output_root: Path) -> Path:

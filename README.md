@@ -153,8 +153,8 @@ are gitignored — regenerate them locally with the MATLAB-batch scripts in
 | C — Full Optimal | ✅ Complete (VAE / ELBO / confidence / MIL / curriculum / two-stage / accumulation) |
 | CC — Extra-credit features | 🚧 4 of 8 done — CC.1 (Conv/Resnet/Multi-Filter encoders + spec registry), CC.3 (MAE), CC.4 (SGDM), CC.5 (S&F all 5 variants); CC.2 (PCA), CC.6 (learnable offset/scale), CC.7 (unweighted loss), CC.8 (full SLURM sweep coverage) pending |
 | D — Cluster deployment | ⏳ Pending |
-| E — Educational curriculum | 🚧 Scaffolded (authored alongside code milestones) |
-| F — Reference documentation | 🚧 Scaffolded (authored alongside code milestones) |
+| E — Educational curriculum | ⏳ Directory scaffold only (0 of ~55 notebooks authored) |
+| F — Reference documentation | 🚧 ~6 concept pages + ~4 cookbook entries authored; Sphinx API stub exists; full curriculum coverage pending |
 
 T3 convergence parity and T4 dashboard rendering are validated against real
 multi-day MATLAB training runs and are tracked separately from the code-side
@@ -164,10 +164,15 @@ milestone completion above.
 
 - **Reference documentation** (Milestone F): `docs/` — MkDocs narrative + Sphinx API.
   Build locally with `bash scripts/build_docs.sh`, output in `docs/build/`.
-  Narrative concept/cookbook pages are authored alongside the code milestone that
-  introduces them; several are still stubs pending Milestone C+.
-- **Educational notebooks** (Milestone E): `notebooks/` — ~60 Jupyter notebooks
-  taking a MATLAB programmer to expert Python/PyTorch fluency on this pipeline.
+  Status: Sphinx API scaffold + ~6 concept pages + ~4 cookbook entries
+  authored; the full curriculum coverage spec'd in `docs/PLAN.md` is still
+  pending and will likely be filled in alongside or after Milestone D.
+- **Educational notebooks** (Milestone E): `notebooks/` — target ~55 Jupyter notebooks
+  across 10 modules taking a MATLAB programmer to expert Python/PyTorch
+  fluency on this pipeline. **Status: directory scaffold only — 0 notebooks
+  authored.** Originally planned to be written alongside each code milestone
+  but in practice we've prioritized the code-side work first; the notebook
+  curriculum is a follow-up to Milestone D.
 - **Migration plan**: [`docs/PLAN.md`](docs/PLAN.md) — the canonical spec for
   this port, including the full list of MATLAB quirks that must be preserved.
 

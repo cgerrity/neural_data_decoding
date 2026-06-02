@@ -72,6 +72,43 @@ def test_multi_head_cross_entropy_rejects_bad_weight_count() -> None:
         )
 
 
+# ───────────────────────── CC.7 — WeightedLoss='' unweighted path ─────────────────────────
+
+
+def test_unweighted_cross_entropy_via_none(
+) -> None:
+    """``class_weights_per_dim=None`` exercises the unweighted branch.
+
+    MATLAB ``cgg_getWeightsForLoss.m`` lines 8-14 (called from the
+    active ``cgg_trainNetwork.m`` line 386):
+      switch WeightedLoss
+        case 'Inverse'  -> per-class weights
+        otherwise       -> Weights = cell(0)  (empty)
+
+    The Python port maps ``None`` to that ``otherwise`` branch —
+    ``F.cross_entropy`` receives ``weight=None`` which is plain CE
+    without class weighting. Regression-pin for the CC.7
+    ``WeightedLoss=''`` config alternative.
+    """
+    logits = [torch.randn(4, 3), torch.randn(4, 2)]
+    targets = torch.tensor([[0, 0], [1, 1], [2, 0], [0, 1]])
+    loss_none = multi_head_cross_entropy(logits, targets, class_weights_per_dim=None)
+    loss_default = multi_head_cross_entropy(logits, targets)  # default = None
+    assert float(loss_none) == pytest.approx(float(loss_default))
+
+
+def test_unweighted_differs_from_inverse_weighted(
+) -> None:
+    """Unweighted CE differs from inverse-frequency-weighted CE on imbalanced data."""
+    # Heavily imbalanced labels: dim 0 has class 0 4x, class 1 1x.
+    targets = torch.tensor([[0], [0], [0], [0], [1]])
+    logits = [torch.randn(5, 2)]
+    unweighted = multi_head_cross_entropy(logits, targets, class_weights_per_dim=None)
+    weights = inverse_frequency_class_weights(targets, num_classes_per_dim=[2])
+    weighted = multi_head_cross_entropy(logits, targets, class_weights_per_dim=weights)
+    assert float(unweighted) != pytest.approx(float(weighted))
+
+
 # ───────────────────────── inverse_frequency_class_weights ─────────────────────────
 
 

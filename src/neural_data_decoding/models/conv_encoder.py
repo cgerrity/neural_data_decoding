@@ -46,6 +46,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from neural_data_decoding.models.layers.pca import PCAEncoder
 from neural_data_decoding.models.registry import register_encoder
 from neural_data_decoding.models.stitching_fusion.convolutional import (
     PerWindowConvolutionalCoder,
@@ -358,11 +359,27 @@ def build_multi_filter_convolutional_encoder(
     )
 
 
+def build_pca_encoder(cfg: Mapping[str, Any]) -> PCAEncoder:
+    """Builder for the ``'PCA'`` architecture (CC.2).
+
+    Returns an unfitted :class:`PCAEncoder`; the CLI must call
+    ``encoder.fit_from_dataloader(train_loader)`` before training.
+    """
+    try:
+        in_features = int(cfg["in_features"])
+    except KeyError as exc:
+        raise KeyError(f"PCA encoder builder: missing cfg key {exc}") from exc
+    hidden_sizes = [int(h) for h in cfg.get("hidden_sizes", [in_features // 2])]
+    n_components = int(cfg.get("n_components", hidden_sizes[-1]))
+    return PCAEncoder(in_features=in_features, n_components=n_components)
+
+
 register_encoder("Convolutional")(build_convolutional_encoder)
 register_encoder("Resnet")(build_resnet_encoder)
 register_encoder("Multi-Filter Convolutional")(
     build_multi_filter_convolutional_encoder,
 )
+register_encoder("PCA")(build_pca_encoder)
 
 
 __all__ = [
@@ -370,5 +387,6 @@ __all__ = [
     "MultiFilterConvolutionalEncoder",
     "build_convolutional_encoder",
     "build_multi_filter_convolutional_encoder",
+    "build_pca_encoder",
     "build_resnet_encoder",
 ]
