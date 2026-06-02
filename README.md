@@ -135,7 +135,7 @@ python -m pytest
 python -m pytest -m needs_matlab
 ```
 
-Currently **580 tests pass** in the default suite (plus 4 MATLAB-gated parity
+Currently **600 tests pass** in the default suite (plus 4 MATLAB-gated parity
 tests that run with `-m needs_matlab`).
 
 Parity tests compare against MATLAB-generated reference fixtures. Those fixtures
@@ -151,7 +151,7 @@ are gitignored — regenerate them locally with the MATLAB-batch scripts in
 | A — Logistic tracer | ✅ Complete |
 | B — GRU + Classifier | ✅ Complete (T2 single-step parity verified) |
 | C — Full Optimal | ✅ Complete (VAE / ELBO / confidence / MIL / curriculum / two-stage / accumulation) |
-| CC — Extra-credit features | 🚧 3 of 8 sub-milestones done — CC.3 (MAE), CC.4 (SGDM), CC.5 (S&F all 5 variants); CC.1 (Conv/ResNet registry), CC.2 (PCA), CC.6 (learnable offset/scale), CC.7 (unweighted loss), CC.8 (SLURM sweep coverage) pending |
+| CC — Extra-credit features | 🚧 3 sub-milestones + CC.1 Phase A done — CC.3 (MAE), CC.4 (SGDM), CC.5 (S&F all 5 variants), CC.1 Phase A (architecture spec registry); CC.1 Phase B (CLI dispatch), CC.2 (PCA), CC.6 (learnable offset/scale), CC.7 (unweighted loss), CC.8 (full SLURM sweep coverage) pending |
 | D — Cluster deployment | ⏳ Pending |
 | E — Educational curriculum | 🚧 Scaffolded (authored alongside code milestones) |
 | F — Reference documentation | 🚧 Scaffolded (authored alongside code milestones) |
