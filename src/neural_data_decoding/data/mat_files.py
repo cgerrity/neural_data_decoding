@@ -29,13 +29,22 @@ import mat73 as _mat73
 import scipy.io as _sio
 
 
-# The first 8 bytes of an HDF5 file are this magic signature.
-# (MATLAB v7.3 files are HDF5 containers.)
-_HDF5_MAGIC = b"\x89HDF\r\n\x1a\n"
+# MATLAB v7.3 files are HDF5 *containers*, but they have a 116-byte
+# ASCII description header followed by 8 subsys bytes, then a 2-byte
+# version word at offset 124. v5/v6/v7 files use 0x0100 there; v7.3
+# uses 0x0200. The actual HDF5 magic signature appears at offset 512
+# (start of the embedded HDF5 stream). Checking the version word is
+# the cheapest reliable discriminator.
+_MAT_VERSION_OFFSET = 124
+_MAT_VERSION_V73 = 0x0200
 
 
 def _is_hdf5_mat(path: Path) -> bool:
-    """Return True iff ``path`` is a MATLAB v7.3 (HDF5) file.
+    """Return ``True`` iff ``path`` is a MATLAB v7.3 (HDF5) file.
+
+    Inspects the 2-byte version field at offset 124 of the MATLAB
+    header. v7.3 files use ``0x0200`` there; pre-v7.3 files use
+    ``0x0100``.
 
     Parameters
     ----------
@@ -45,18 +54,30 @@ def _is_hdf5_mat(path: Path) -> bool:
     Returns
     -------
     bool
-        ``True`` if the file begins with the HDF5 magic signature.
+        ``True`` if the file is MATLAB v7.3 (HDF5-backed).
 
     Raises
     ------
     FileNotFoundError
         If ``path`` does not exist.
     OSError
-        If the file cannot be opened for reading.
+        If the file cannot be opened for reading or is shorter than
+        the MATLAB header (128 bytes).
     """
     with path.open("rb") as fp:
-        head = fp.read(8)
-    return head == _HDF5_MAGIC
+        fp.seek(_MAT_VERSION_OFFSET)
+        version_bytes = fp.read(2)
+    if len(version_bytes) < 2:
+        raise OSError(
+            f"{path} is too short to be a MATLAB .mat file (header "
+            "expected at least 128 bytes).",
+        )
+    # Little-endian per the MATLAB spec; the byte order marker at
+    # offset 126 confirms but we don't need to inspect it for the
+    # version check since both LE and BE happen to write the version
+    # the same way.
+    version = int.from_bytes(version_bytes, "little")
+    return version == _MAT_VERSION_V73
 
 
 def load_mat(path: str | Path) -> dict[str, Any]:
