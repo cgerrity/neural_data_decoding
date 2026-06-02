@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **600 passed, 4 deselected** by default; **4 passed** under
+Expected: **614 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -84,7 +84,7 @@ neural_data_decoding/
 | A — Logistic tracer | ✅ Complete + smoke-runnable | CM_Table T4 round-trip |
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
-| CC — Extra-credit features | 🚧 3 of 8 + CC.1 Phase A done — CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.1 Phase A (architecture spec registry for 8 names: SLURM-sweep 7 + production GRU); CC.1 Phase B (CLI dispatch wiring), CC.2 (PCA), CC.6 (learnable offset/scale), CC.7 (unweighted loss), CC.8 (full SLURM sweep coverage) pending | Architecture registry maps each MATLAB ``ModelName`` → frozen ``ArchitectureSpec`` dataclass; Convolutional/Resnet/Multi-Filter variants route through existing PerWindowConvolutionalCoder + Gemini code via parameter switching (no new builder code) |
+| CC — Extra-credit features | 🚧 4 of 8 done — CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + **CC.1 (Conv/Resnet/Multi-Filter encoders + arch registry)**; CC.2 (PCA), CC.6 (learnable offset/scale), CC.7 (unweighted loss), CC.8 (full SLURM sweep coverage) pending | All 7 SLURM-sweep ``ModelName`` strings (Logistic Regression / Feedforward / GRU / LSTM / Convolutional / Resnet / Multi-Filter Convolutional) buildable via the encoder registry — except ``'PCA'`` which is registered as a spec but its builder awaits CC.2 |
 | D — Cluster deployment | ⏳ Pending |  |
 
 Milestone C status — what's done
@@ -457,36 +457,45 @@ work order; the canonical mapping is:
   * Phase 1: Feedforward variant + composite hooks
   * Phase 2: Default convolutional variant (per-window 2-D conv, WantSplitAreas)
   * Phase 3: Three Gemini cascade variants
-* **CC.1 — Convolutional / ResNet architecture registry** — split
-  into two phases:
-  * ✅ **Phase A** — architecture spec registry. New
+* ~~**CC.1 — Convolutional / ResNet architecture registry**~~ ✅
+  done across two phases:
+  * **Phase A** (commit f359d38) — architecture spec registry.
     ``models/architecture_registry.py`` provides
     :class:`ArchitectureSpec` (frozen dataclass mirroring
-    ``cgg_constructNetworkArchitecture.m``'s flag bundle) plus
-    :func:`resolve_architecture`, :func:`list_architectures`,
-    :func:`has_architecture`. Registered 8 architectures: the 7
-    SLURM-sweep variants (``'Feedforward'``, ``'LSTM'``,
-    ``'Convolutional'``, ``'Resnet'``, ``'Multi-Filter
-    Convolutional'``, ``'Logistic Regression'``, ``'PCA'``) plus
-    production ``'GRU'``. Per the project directive, each entry's
-    flag bundle routes through existing builders without new code:
-    Simple-branch (Feedforward/GRU/LSTM/Logistic) → SimpleSequenceEncoder
-    + MultiHeadClassifier; Convolutional / Resnet →
-    PerWindowConvolutionalCoder; Multi-Filter Convolutional →
-    GeminiStitchingFusionModule's ``'Parallel Single Level'`` variant;
-    PCA → placeholder pending CC.2.
-  * ⏳ **Phase B** — CLI dispatch wiring. CLI's ``_build_model``
-    needs to consult ``resolve_architecture(cfg.model_name)`` and
-    apply the spec's flag bundle to the model construction (instead
-    of reading individual ``cfg.transform`` / ``cfg.is_variational``
-    / etc. fields directly). For Convolutional / Resnet / Multi-Filter,
-    the composite needs to route through the appropriate per-window
-    conv builder. Backwards compat preserved for configs that set
-    flag fields explicitly. Out of scope until Phase B lands: the
-    additional 36 architectures in
+    ``cgg_constructNetworkArchitecture.m``'s flag bundle) and
+    resolve/list/has-architecture helpers. Registered 8 architectures
+    (SLURM sweep × 7 + production ``'GRU'``).
+  * **Phase B** — encoder builders + CLI wiring. New
+    ``models/conv_encoder.py`` provides
+    :class:`ConvolutionalEncoder` and
+    :class:`MultiFilterConvolutionalEncoder` Pythonic adapters that
+    wrap :class:`PerWindowConvolutionalCoder` (CC.5 Phase 2) and
+    :class:`GeminiStitchingFusionModule`'s ``'Parallel Single Level'``
+    variant (CC.5 Phase 3) respectively. Both accept the composite's
+    standard 3-D ``(B, W, T*A*C)`` input, internally reshape to
+    explicit ``(B, W, T, A, C)`` for the per-window conv kernels,
+    and re-flatten to 3-D for the bottleneck. The reshape is the
+    Pythonic alternative to MATLAB's ``dlarray`` ``"CBTSS"`` format
+    juggling — functionally identical (same kernel ``(1, n)``,
+    stride, optional ``groups=A`` for split-areas) but with explicit
+    boundary handling. Registered ``'Convolutional'``, ``'Resnet'``,
+    ``'Multi-Filter Convolutional'`` via ``register_encoder`` so
+    ``build_encoder(name, cfg)`` works through the unified registry.
+    CLI's ``_build_model`` (B-path) gained ``samples_per_window`` /
+    ``num_areas`` / ``stride`` plumbing and now computes
+    ``flat_in_features = in_features * samples_per_window *
+    num_areas`` for the encoder cfg (fixing a pre-existing bug where
+    the post-data-restructure B path passed ``C`` instead of
+    ``T*A*C``). 14 new tests cover the conv encoders + registry
+    dispatch. Smoke runs: ``B_gru_classifier_synthetic.yaml`` with
+    ``model_name`` set to each of ``Convolutional`` / ``Resnet`` /
+    ``Multi-Filter Convolutional`` (T=4, A=2 multi-dim) trains
+    end-to-end with train accuracy climbing (0.44→0.82 across 3
+    epochs for Resnet, similar for the others). The other 36
+    architectures in
     ``PARAMETERS_cgg_constructNetworkArchitecture.m`` not in the
-    SLURM sweep (they're parameter combinations of the same builders;
-    add to the registry as needed).
+    SLURM sweep are parameter combinations of the same builders;
+    add to the registry as needed.
 * **CC.2 — PCA backbone** — frozen PCA encode/decode in
   `models/layers/pca.py`, pre-compute components per fold via
   `sklearn.decomposition.PCA`, inject as `nn.Linear` with

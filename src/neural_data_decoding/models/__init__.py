@@ -23,3 +23,9 @@ from . import encoder  # noqa: F401
 from . import bottleneck  # noqa: F401
 from . import composite  # noqa: F401
 from . import decoder  # noqa: F401
+
+# Milestone CC.1 — registers the Convolutional / Resnet /
+# Multi-Filter Convolutional encoders from the SLURM sweep
+# parameter space. Imported after composite so the conv encoders
+# can reach into stitching_fusion/* for their underlying builders.
+from . import conv_encoder  # noqa: F401

@@ -555,13 +555,23 @@ def _build_model(
         }
         return build_variational_composite(variational_cfg)
 
-    # Milestone B+ — composite Encoder + Bottleneck + Classifier.
+    # Milestone B+ — composite Encoder + Bottleneck + Classifier. The
+    # encoder receives 3-D ``(B, W, T*A*C)`` from the composite's
+    # FlattenPerWindow (which collapses the per-window dims), so its
+    # ``in_features`` is the flat product, not raw ``C``. Matches the
+    # variational path's ``_build_ae_core`` convention.
+    samples_per_window = int(cfg.get("synthetic_samples_per_window", 1))
+    num_areas = int(cfg.get("synthetic_num_areas", 1))
+    flat_in_features = in_features * samples_per_window * num_areas
     encoder_cfg = {
-        "in_features": in_features,
+        "in_features": flat_in_features,
+        "samples_per_window": samples_per_window,
+        "num_areas": num_areas,
         "hidden_sizes": list(cfg.hidden_sizes),
         "dropout": float(cfg.dropout),
         "want_normalization": bool(cfg.want_normalization),
         "activation": str(cfg.activation),
+        "stride": int(cfg.get("stride", 2)),
     }
     encoder = build_encoder(model_name, encoder_cfg)
     encoder_out = getattr(encoder, "out_features", in_features)
