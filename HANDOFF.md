@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **680 passed, 4 deselected** by default; **4 passed** under
+Expected: **705 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -85,7 +85,7 @@ neural_data_decoding/
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
 | CC — Extra-credit features | ✅ **all 8 sub-milestones done** — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.6 (offset/scale augmentation) + CC.7 (unweighted loss) + CC.8 (SLURM sweep coverage audit + 24 integration tests) | See `sweeps/parameter_coverage.py` for the full 47-variable support matrix |
-| D — Cluster deployment | 🚧 In progress — plan locked, implementation underway. See [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md) for the full plan |  |
+| D — Cluster deployment | 🚧 In progress — D.1 `MatFileTrialDataset` complete (24 tests, real-fixture parity); D.2-D.8 pending. See [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md) for the full plan | D.1 windowing parity verified by direct array indexing |
 
 Milestone C status — what's done
 
@@ -567,12 +567,16 @@ Other untracked items mentioned in passing:
 
 Get the Python port runnable on real GPU hardware:
 
-- **submitit / Ray Tune sweep launchers** for hyperparameter sweeps
+- **submitit / Ray Tune sweep launchers** ❌ — explicitly out of scope
+  per user (pattern is bash → sbatch → Python).
 - **GPU + ACCRE integration** — real-data path with multi-probe SSCTB
   inputs, `needReshape` plumbing, parallel `parfor`-equivalent
-  micro-batch processing
-- **Real-data dataset** — port `MatFileTrialDataset` (currently a
-  TODO comment in `dataset.py`); validate against real ephys files
+  micro-batch processing.
+- **Real-data dataset** ✅ — `MatFileTrialDataset` lives at
+  `src/neural_data_decoding/data/mat_dataset.py`, validated against
+  `results/Decision/Decision_Data_0000011.mat` (24 tests pass).
+- **Sweep dispatcher + CLI + `.slurm` template generator** —
+  see D.2-D.6 in [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md).
 
 ### What "done" looks like across all of these
 

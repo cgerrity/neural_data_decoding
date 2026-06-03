@@ -14,7 +14,7 @@
 
 1. ✅ Fix `mat_files.py` HDF5 detection (was checking offset 0; MATLAB v7.3 files have ASCII header there and version field at offset 124)
 2. ✅ Multi-pass MATLAB read of `cgg_loadDataArray.m`, `cgg_loadTargetArray.m`, `cgg_runAutoEncoder.m`, `cgg_assignSLURMSession.m`, `cgg_procAutoEncoder.m`, `cgg_getKFoldPartitions.m`, `SLURMPARAMETERS_cgg_runAutoEncoder_v2.m`, `cgg_getClassifierOutputsFromProbabilities.m`
-3. **D.1 — `MatFileTrialDataset`** in `src/neural_data_decoding/data/mat_dataset.py`
+3. ✅ **D.1 — `MatFileTrialDataset`** in `src/neural_data_decoding/data/mat_dataset.py` (24 tests, real-fixture parity verified by direct indexing)
 4. **D.2 — Sweep dispatcher** in `src/neural_data_decoding/sweeps/dispatcher.py` (port all ~147 non-commented entries from the MATLAB SLURMPARAMETERS file)
 5. **D.3 — CLI extensions** to `train` subcommand: `--sweep-index`, `--session-run-idx`, `--session`, `--override`
 6. **D.4 — Start-of-run banner** matching MATLAB's pattern (cfg dump, datetime, GPU table, session/fold identifier, git SHA, user identifier)

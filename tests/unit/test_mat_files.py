@@ -26,23 +26,45 @@ def test_load_pre_v73_mat(tmp_path: Path) -> None:
 
 
 def test_v73_file_is_detected_as_hdf5(tmp_path: Path) -> None:
-    """Files with the HDF5 magic prefix are routed to the v7.3 backend.
+    """A file with the v7.3 version word ``0x0200`` at offset 124 is detected.
 
-    A real MATLAB v7.3 file carries proprietary attributes that ``h5py``
-    cannot reproduce, so we cannot round-trip without MATLAB. Instead we
-    verify only that an HDF5-magic file triggers the v7.3 code path — full
-    round-trip parity against MATLAB-generated fixtures lives in
-    ``tests/parity/`` and is gated on the ``needs_matlab`` marker.
+    Detection inspects the 2-byte version field of the MATLAB header —
+    ``0x0200`` for v7.3 (HDF5-backed), ``0x0100`` for v5/v6/v7. A pure
+    h5py file does not have this MATLAB header, so we synthesize the
+    minimal header bytes here. Full round-trip parity against real
+    MATLAB-generated v7.3 files lives in ``tests/parity/`` (gated on
+    the ``needs_matlab`` marker) and in the smoke fixture at
+    ``results/Decision/Decision_Data_0000011.mat`` (exercised by
+    :mod:`tests.unit.test_mat_dataset`).
     """
     from neural_data_decoding.data.mat_files import _is_hdf5_mat
 
-    h5py = pytest.importorskip("h5py")
+    v73_path = tmp_path / "trial_v73.mat"
+    # MATLAB header layout: 116 bytes of ASCII description, 8 bytes of
+    # subsys offset, then the 2-byte version word at offset 124 and the
+    # endian-marker bytes "IM" at offset 126. We don't need anything
+    # past offset 128 to drive the detector.
+    header = b"MATLAB 7.3 MAT-file synthetic header" + b" " * 80
+    header = header[:116] + (b"\x00" * 8) + b"\x00\x02" + b"IM"
+    assert len(header) == 128
+    v73_path.write_bytes(header)
 
-    hdf5_path = tmp_path / "trial_v73.mat"
-    with h5py.File(str(hdf5_path), "w") as fp:
-        fp.create_dataset("payload", data=np.array([1.0, 2.0]))
+    assert _is_hdf5_mat(v73_path) is True
 
-    assert _is_hdf5_mat(hdf5_path) is True
+
+def test_real_v73_fixture_is_detected_when_present() -> None:
+    """The repo's real MATLAB v7.3 sample file routes through the v7.3 backend."""
+    from neural_data_decoding.data.mat_files import _is_hdf5_mat
+
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "results"
+        / "Decision"
+        / "Decision_Data_0000011.mat"
+    )
+    if not fixture.is_file():
+        pytest.skip(f"Sample v7.3 .mat fixture not present: {fixture}")
+    assert _is_hdf5_mat(fixture) is True
 
 
 def test_v5_file_is_detected_as_non_hdf5(tmp_path: Path) -> None:
