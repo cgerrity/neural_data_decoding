@@ -20,8 +20,8 @@
 6. **D.4 — Start-of-run banner** matching MATLAB's pattern (cfg dump, datetime, GPU table, session/fold identifier, git SHA, user identifier) — pending
 7. ✅ **D.5 — `_identify_user()` helper** in `sweeps/user_identity.py` — `$USER` ∈ {cgerrity, gerritcg} OR git email match → auto-default SLURM `--mail-user` (4 tests)
 8. ✅ **D.6 — `.slurm` template generator** via the `sweep-emit-slurm` subcommand — embeds (sweep_index, SC, IDX, SessionRunIDX) in the output filename for MATLAB log cross-reference; `set -euo pipefail` for fail-fast; auto-gated mail-user (17 tests)
-9. **D.7 — `configs/target_milestone/real_data_base.yaml`** (real-data analog of `C_optimal_synthetic.yaml`)
-10. **D.8 — Smoke run** end-to-end on `results/Decision/Decision_Data_0000011.mat` + `Target_0000011.mat`
+9. ✅ **D.7 — `configs/target_milestone/real_data_base.yaml`** — Hydra config mirroring `C_optimal_synthetic.yaml` against real `.mat` files; required `data_dir` / `target_dir` paths (`???` sentinel) plus per-trial windowing knobs (`data_width`, `window_stride`, `feature_dimensions`, `dimension_indices`). CLI auto-routes to `MatFileTrialDataset` when `cfg.data_dir` is set.
+10. ✅ **D.8 — Smoke run** end-to-end on `results/Decision/Decision_Data_0000011.mat` + `Target_0000011.mat` — 2 integration tests in `tests/integration/test_real_data_smoke.py`; verifies `CM_Table.mat`, `CM_Table_Validation.mat`, `EncodingParameters.yaml`, and optimal/current `.pt` snapshots all land correctly.
 11. Commit + push
 
 ## Critical facts about the MATLAB pipeline

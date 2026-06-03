@@ -135,7 +135,7 @@ python -m pytest
 python -m pytest -m needs_matlab
 ```
 
-Currently **758 tests pass** in the default suite (plus 4 MATLAB-gated parity
+Currently **760 tests pass** in the default suite (plus 4 MATLAB-gated parity
 tests that run with `-m needs_matlab`).
 
 Parity tests compare against MATLAB-generated reference fixtures. Those fixtures

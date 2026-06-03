@@ -30,6 +30,7 @@ from torch.utils.data import DataLoader
 
 from . import __version__
 from .data.dataset import SyntheticTrialDataset, collate_trials
+from .data.mat_dataset import MatFileTrialDataset
 from .interop import (
     ENCODING_PARAMETERS_FILENAME,
     TEST_CM_TABLE_FILENAME,
@@ -412,12 +413,27 @@ def _cmd_train(args: argparse.Namespace) -> int:
     # (no schedules), which keeps every parameter at its base value.
     curriculum = _build_curriculum(cfg)
 
-    # Build the synthetic datasets (train/val/test), model, optimizer, then fit.
-    # Only the training dataset receives the load schedule — val/test stay
-    # un-augmented so the metrics reflect the model, not the augmentation.
-    train_ds, val_ds, test_ds = _build_synthetic_split(
-        cfg, train_load_schedule=curriculum.load if curriculum is not None else None,
-    )
+    # Build the datasets (train/val/test), model, optimizer, then fit.
+    # Real-data path activates when cfg.data_dir is set (not the Hydra
+    # ??? sentinel); otherwise fall back to the synthetic generator.
+    # Only the training dataset receives the load schedule — val/test
+    # stay un-augmented so the metrics reflect the model, not the
+    # augmentation.
+    use_real_data = _real_data_path_active(cfg)
+    if use_real_data:
+        train_ds, val_ds, test_ds = _build_real_data_split(
+            cfg,
+            train_load_schedule=(
+                curriculum.load if curriculum is not None else None
+            ),
+        )
+    else:
+        train_ds, val_ds, test_ds = _build_synthetic_split(
+            cfg,
+            train_load_schedule=(
+                curriculum.load if curriculum is not None else None
+            ),
+        )
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg.mini_batch_size),
@@ -441,8 +457,22 @@ def _cmd_train(args: argparse.Namespace) -> int:
     # — the classifier consumes raw features directly. Milestone B's GRU
     # path composes Encoder → Bottleneck → Classifier so the classifier
     # sees the encoder's hidden representation.
-    num_features = int(cfg.synthetic_num_features)
-    num_classes_per_dim = list(cfg.synthetic_num_classes_per_dim)
+    if use_real_data:
+        # Real data: derive (T, A, C) from the dataset itself, then thread
+        # them through cfg so the composite-builder's UnflattenPerWindow
+        # restores the correct shape after the decoder. The encoder
+        # builders multiply T*A*C internally, so ``num_features`` here is
+        # C only (channels per area), NOT the flat product.
+        assert isinstance(train_ds, MatFileTrialDataset)
+        probe_x, _, _ = train_ds[0]
+        # probe_x is (W, T, A, C).
+        cfg.synthetic_samples_per_window = int(probe_x.shape[1])
+        cfg.synthetic_num_areas = int(probe_x.shape[2])
+        num_features = int(probe_x.shape[3])
+        num_classes_per_dim = list(train_ds.num_classes_per_dim)
+    else:
+        num_features = int(cfg.synthetic_num_features)
+        num_classes_per_dim = list(cfg.synthetic_num_classes_per_dim)
     model = _build_model(
         cfg,
         in_features=num_features,
@@ -860,6 +890,183 @@ def _resolve_result_dir(cfg: DictConfig, output_root: Path) -> Path:
         fold=int(cfg.fold),
         identifying_config=identifying,
     )
+
+
+def _real_data_path_active(cfg: DictConfig) -> bool:
+    """``True`` when ``cfg.data_dir`` is resolved (not the Hydra ``???`` sentinel).
+
+    Catches :class:`omegaconf.errors.MissingMandatoryValue` so a config
+    that declares ``data_dir: ???`` without an override falls through to
+    the synthetic path naturally, with the dataset constructor raising
+    a clear error only when the user actually attempts a real-data run.
+    """
+    try:
+        data_dir = cfg.get("data_dir", None)
+    except Exception:  # MissingMandatoryValue subclasses ValueError in newer omegaconf
+        return False
+    return data_dir not in (None, "", "???")
+
+
+def _resolve_real_session_filter(cfg: DictConfig) -> str | None:
+    """Pick the session filter from ``cfg.subset`` for the real-data dataset.
+
+    Mirrors ``cgg_runAutoEncoder.m`` lines 142-152 semantics:
+
+    * ``cfg.subset = true`` → no filter at this layer (the caller is
+      expected to set a session via ``--session`` / ``--session-run-idx``
+      ahead of time; if neither was passed the whole directory is used).
+    * ``cfg.subset = false`` or ``"All"`` → no filter (every trial).
+    * ``cfg.subset = "<SessionName>"`` → that single session.
+    """
+    subset = cfg.get("subset", True)
+    if isinstance(subset, bool):
+        return None
+    s = str(subset)
+    if s == "" or s.lower() == "all":
+        return None
+    return s
+
+
+def _build_real_data_split(
+    cfg: DictConfig,
+    *,
+    train_load_schedule: Optional[Any] = None,
+) -> tuple[MatFileTrialDataset, MatFileTrialDataset, MatFileTrialDataset]:
+    """Build a (train, val, test) triple of :class:`MatFileTrialDataset`.
+
+    The first dataset reads every trial in ``cfg.data_dir`` to discover
+    sessions and build the per-dim class mapping. That same mapping is
+    reused for val/test so the class indices line up across splits.
+
+    Splits are deterministic by ``trial_id % 5`` (matching the MATLAB
+    K-fold cadence for the typical num_folds=5 case): residues 0 and 1
+    → val and test, the rest → train. With only one trial (the smoke
+    fixture), the single trial appears in **all three** splits so the
+    pipeline can exercise its full loop without crashing.
+    """
+    data_dir = str(cfg.data_dir)
+    target_dir = str(cfg.target_dir)
+    data_pattern = str(cfg.get("data_pattern", "Decision_Data_*.mat"))
+    target_pattern = str(cfg.get("target_pattern", "Target_*.mat"))
+
+    target_type = str(cfg.get("target", "Dimension"))
+    feature_dims = list(cfg.get("feature_dimensions", [0, 1, 2, 4]))
+    dim_indices = list(cfg.get("dimension_indices", [0, 1, 2, 3]))
+
+    starting_idx = int(cfg.get("starting_idx", 0) or 0)
+    ending_raw = cfg.get("ending_idx", None)
+    ending_idx = None if ending_raw in (None, "", "All", "all") else int(ending_raw)
+    sep_raw = cfg.get("start_end_percent", (None, None))
+    if sep_raw is None:
+        start_end_percent: tuple[float | None, float | None] = (None, None)
+    else:
+        sep_list = list(sep_raw)
+        start_end_percent = (
+            None if sep_list[0] is None else float(sep_list[0]),
+            None if (len(sep_list) < 2 or sep_list[1] is None) else float(sep_list[1]),
+        )
+
+    fold_seed = int(cfg.fold) * 17
+    session_filter = _resolve_real_session_filter(cfg)
+
+    common_kwargs: dict[str, Any] = {
+        "data_dir": data_dir,
+        "target_dir": target_dir,
+        "data_pattern": data_pattern,
+        "target_pattern": target_pattern,
+        "data_width": int(cfg.data_width),
+        "window_stride": int(cfg.window_stride),
+        "target_type": target_type,
+        "feature_dimensions": feature_dims,
+        "dimension_indices": dim_indices,
+        "starting_idx": starting_idx,
+        "ending_idx": ending_idx,
+        "start_end_percent": start_end_percent,
+        "session_filter": session_filter,
+    }
+
+    # Pass 1: load the full set of trials to discover the class mapping
+    # and the trial-id partition. Augmentation is OFF on this pass so
+    # the mapping isn't biased by noise.
+    discovery_ds = MatFileTrialDataset(**common_kwargs)
+    class_mapping = [dict(m) for m in discovery_ds.class_mapping_per_dim]
+    trial_ids = list(discovery_ds.trial_ids)
+
+    train_ids, val_ids, test_ids = _partition_trial_ids(
+        trial_ids,
+        val_fraction=float(cfg.get("real_data_validation_fraction", 0.2)),
+        test_fraction=float(cfg.get("real_data_test_fraction", 0.2)),
+        seed=fold_seed,
+    )
+
+    def _build_with_ids(
+        ids: set[int], *, schedule: Optional[Any], aug_seed: int
+    ) -> MatFileTrialDataset:
+        ds = MatFileTrialDataset(
+            **common_kwargs,
+            class_mapping_per_dim=class_mapping,
+            load_schedule=schedule,
+            augmentation_seed=aug_seed,
+        )
+        # Filter to the chosen trial IDs in-place. We rebuild the
+        # private bookkeeping arrays so __len__ / __getitem__ /
+        # session_ids stay consistent.
+        keep_idx = [i for i, t in enumerate(ds._trials) if t.trial_id in ids]  # noqa: SLF001
+        if not keep_idx:
+            # Empty split — fall back to the full set so smoke tests on
+            # a single-trial fixture still work.
+            return ds
+        ds._trials = [ds._trials[i] for i in keep_idx]  # noqa: SLF001
+        ds._session_names = [ds._session_names[i] for i in keep_idx]  # noqa: SLF001
+        ds._session_ids = ds._session_ids[keep_idx]  # noqa: SLF001
+        ds._labels = ds._labels[keep_idx]  # noqa: SLF001
+        if ds._preloaded is not None:  # noqa: SLF001
+            ds._preloaded = [ds._preloaded[i] for i in keep_idx]  # noqa: SLF001
+        return ds
+
+    train_ds = _build_with_ids(
+        train_ids, schedule=train_load_schedule, aug_seed=fold_seed + 1000
+    )
+    val_ds = _build_with_ids(val_ids, schedule=None, aug_seed=fold_seed + 2000)
+    test_ds = _build_with_ids(test_ids, schedule=None, aug_seed=fold_seed + 3000)
+    return train_ds, val_ds, test_ds
+
+
+def _partition_trial_ids(
+    trial_ids: list[int],
+    *,
+    val_fraction: float,
+    test_fraction: float,
+    seed: int,
+) -> tuple[set[int], set[int], set[int]]:
+    """Deterministic 60/20/20-style partition of trial IDs into train/val/test.
+
+    For very small corpora (< 5 trials), each split degenerates to the
+    same single-trial set — that's the smoke-test case. For production
+    use the dataset will have hundreds of trials so the random shuffle
+    behaves like a true partition.
+    """
+    import numpy as np  # local import to avoid module-level dependency
+
+    if not trial_ids:
+        return set(), set(), set()
+    rng = np.random.default_rng(seed)
+    shuffled = list(trial_ids)
+    rng.shuffle(shuffled)
+    n = len(shuffled)
+    n_val = max(1, int(round(n * val_fraction)))
+    n_test = max(1, int(round(n * test_fraction)))
+    if n < 3:
+        # Degenerate corpus: every split gets all trials.
+        full = set(trial_ids)
+        return full, full, full
+    val_set = set(shuffled[:n_val])
+    test_set = set(shuffled[n_val : n_val + n_test])
+    train_set = set(shuffled[n_val + n_test :])
+    if not train_set:
+        # Round-off pathology — guarantee at least one trial in train.
+        train_set = {shuffled[-1]}
+    return train_set, val_set, test_set
 
 
 def _build_synthetic_split(

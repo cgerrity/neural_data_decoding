@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **758 passed, 4 deselected** by default; **4 passed** under
+Expected: **760 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -85,7 +85,7 @@ neural_data_decoding/
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
 | CC — Extra-credit features | ✅ **all 8 sub-milestones done** — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.6 (offset/scale augmentation) + CC.7 (unweighted loss) + CC.8 (SLURM sweep coverage audit + 24 integration tests) | See `sweeps/parameter_coverage.py` for the full 47-variable support matrix |
-| D — Cluster deployment | 🚧 In progress — D.1-D.6 complete (real-data dataset, 147-entry sweep dispatcher, CLI overrides, `.slurm` template generator, user identification); D.7-D.8 pending (real-data base config + smoke run). See [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md) | D.1 windowing parity by direct indexing; D.2 verified against MATLAB SLURMPARAMETERS_cgg_runAutoEncoder_v2.m |
+| D — Cluster deployment | ✅ **D.1-D.3, D.5-D.8 complete; D.4 (banner) is the only pending sub-item.** Real-data dataset, 147-entry sweep dispatcher, CLI overrides, `.slurm` template generator, user identification, `real_data_base.yaml` config, end-to-end smoke run on `Decision_Data_0000011.mat`. See [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md) | D.1 windowing parity by direct indexing; D.2 verified against MATLAB SLURMPARAMETERS_cgg_runAutoEncoder_v2.m; D.8 trains + writes both CM_Tables end-to-end |
 
 Milestone C status — what's done
 
@@ -582,7 +582,15 @@ Get the Python port runnable on real GPU hardware:
   `--override KEY=VALUE` extend the `train` subcommand; new
   `sweep-emit-slurm` subcommand renders ACCRE-ready `.slurm` files
   with user-identification-gated `--mail-user` defaults.
-- **Real-data base YAML + end-to-end smoke run** — D.7 / D.8 pending.
+- **Real-data base YAML + end-to-end smoke run** ✅ —
+  `configs/target_milestone/real_data_base.yaml` mirrors
+  `C_optimal_synthetic.yaml` against real `Decision_Data_*.mat` files;
+  CLI auto-routes to `MatFileTrialDataset` when `cfg.data_dir` is set;
+  two integration tests in `tests/integration/test_real_data_smoke.py`
+  pin the end-to-end path against `Decision_Data_0000011.mat`.
+- **Start-of-run banner (D.4)** — only remaining D sub-item; would
+  match `cgg_runAutoEncoder.m` lines 320-323 (cfg dump, datetime,
+  GPU table, session/fold identifier, git SHA, user).
 
 ### What "done" looks like across all of these
 

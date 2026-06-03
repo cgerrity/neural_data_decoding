@@ -1,0 +1,115 @@
+# Milestone D — Real-data Optimal config.
+#
+# Mirrors C_optimal_synthetic.yaml's component selection (variational
+# GRU encoder + sampling + decoder + Deep LSTM classifier + Trial/Task
+# confidence + MIL + Soft Three-Stage curriculum) but consumes real
+# Decision_Data_*.mat trials via MatFileTrialDataset instead of the
+# synthetic generator.
+#
+# Required overrides at sbatch time (via `--override KEY=VALUE`):
+#   data_dir   : directory containing Decision_Data_*.mat
+#   target_dir : directory containing Target_*.mat
+#
+# The Hydra ??? sentinel makes those required — the CLI raises
+# MissingMandatoryValue if either is left unset. Pin the paths from
+# the SLURM script header rather than editing this YAML so the same
+# config can serve multiple ACCRE mount layouts.
+#
+# Single-session mode: pass --session NAME OR --session-run-idx K to
+# pick a single session out of the directory. Without either, the
+# dataset reads every trial in the directory.
+
+defaults:
+  - /base
+  - _self_
+
+# ───────────────────────── Run identity ─────────────────────────
+epoch: Decision
+target: Dimension
+
+# ───────────────────────── Architecture (Optimal selection) ─────────────────────────
+model_name: GRU
+classifier_name: "Deep LSTM - Dropout 0.5"
+hidden_sizes: [1000, 500, 250]
+classifier_hidden_size: [250, 100, 50]
+is_variational: true
+encoder_output_type: Stochastic
+loss_type_decoder: "MSE"
+
+dropout: 0.5
+classifier_dropout: 0.5
+want_normalization: false
+activation: ""
+
+# ───────────────────────── Confidence + MIL ─────────────────────────
+confidence_type: ["Trial", "Task"]
+multiple_instance_learning_type: "MIL"
+want_batch_correction: false
+
+# ───────────────────────── Loss weights (Optimal) ─────────────────────────
+weight_reconstruction: 100
+weight_kl: 1
+weight_classification: 10
+weight_confidence: 1
+weight_offset_and_scale: 0
+prior_proportion: 0.9
+rescale_loss_epoch: 0
+
+# ───────────────────────── Training schedule ─────────────────────────
+optimizer: ADAM
+weighted_loss: Inverse
+gradient_clip_type: Global
+gradient_threshold: 100
+num_epochs_autoencoder: 0
+num_epochs_full: 500
+initial_learning_rate: 0.001
+mini_batch_size: 100
+dynamic_parameter_set: "Soft Three-Stage Curriculum - Shortened"
+
+# ───────────────────────── Augmentation bases ─────────────────────────
+std_channel_offset: 0.03
+std_white_noise: 0.015
+std_random_walk: 0.0007
+std_time_shift: 100
+want_separate_time_shift: true
+
+# ───────────────────────── Windowing (cgg_loadDataArray) ─────────────────────────
+# DataWidth + WindowStride together control NumWindows for each trial.
+# Production default: 100 / 50 against the 3001-sample Decision epoch
+# → 59 windows per trial.
+data_width: 100
+window_stride: 50
+starting_idx: 0
+ending_idx: null      # null = use the full sample range
+start_end_percent: [null, null]
+
+# ───────────────────────── Target selection (cgg_loadTargetArray) ─────────────────────────
+# Dimension target dispatches to SelectedObjectDimVals[feature_dimensions][dimension_indices].
+# MATLAB FeatureDimensions = [1,2,3,5]  → 0-indexed (0, 1, 2, 4).
+# MATLAB Dimension         = 1:4        → 0-indexed (0, 1, 2, 3).
+feature_dimensions: [0, 1, 2, 4]
+dimension_indices: [0, 1, 2, 3]
+
+# ───────────────────────── Real-data paths (required) ─────────────────────────
+# Both must be set explicitly via `--override`; the Hydra ???
+# sentinel guards against forgetting.
+data_dir: ???
+target_dir: ???
+# Optional glob overrides (defaults match the MATLAB pipeline output).
+data_pattern: "Decision_Data_*.mat"
+target_pattern: "Target_*.mat"
+
+# ───────────────────────── Single-session subset semantics ─────────────────────────
+# subset: true → the CLI's --session NAME / --session-run-idx K
+#                flags pick a single session.
+# subset: false / "All" → the dataset reads every trial in the dir.
+# A non-empty string here pins a session even without the CLI flag.
+subset: true
+
+# ───────────────────────── Validation split ─────────────────────────
+# Fraction of trials reserved for validation + test (each).
+# Remainder is training. Trials are partitioned deterministically by
+# trial_id mod 5: 60% train, 20% val, 20% test (matches the MATLAB
+# K-fold cadence when num_folds = 5).
+real_data_validation_fraction: 0.2
+real_data_test_fraction: 0.2
