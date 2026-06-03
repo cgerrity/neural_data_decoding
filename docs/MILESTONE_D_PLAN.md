@@ -15,11 +15,11 @@
 1. ✅ Fix `mat_files.py` HDF5 detection (was checking offset 0; MATLAB v7.3 files have ASCII header there and version field at offset 124)
 2. ✅ Multi-pass MATLAB read of `cgg_loadDataArray.m`, `cgg_loadTargetArray.m`, `cgg_runAutoEncoder.m`, `cgg_assignSLURMSession.m`, `cgg_procAutoEncoder.m`, `cgg_getKFoldPartitions.m`, `SLURMPARAMETERS_cgg_runAutoEncoder_v2.m`, `cgg_getClassifierOutputsFromProbabilities.m`
 3. ✅ **D.1 — `MatFileTrialDataset`** in `src/neural_data_decoding/data/mat_dataset.py` (24 tests, real-fixture parity verified by direct indexing)
-4. **D.2 — Sweep dispatcher** in `src/neural_data_decoding/sweeps/dispatcher.py` (port all ~147 non-commented entries from the MATLAB SLURMPARAMETERS file)
-5. **D.3 — CLI extensions** to `train` subcommand: `--sweep-index`, `--session-run-idx`, `--session`, `--override`
-6. **D.4 — Start-of-run banner** matching MATLAB's pattern (cfg dump, datetime, GPU table, session/fold identifier, git SHA, user identifier)
-7. **D.5 — `_identify_user()` helper** (auto-detect Charles for default SLURM mail-user; otherwise leave blank)
-8. **D.6 — `.slurm` template generator** (`python -m neural_data_decoding sweep_emit_slurm`)
+4. ✅ **D.2 — Sweep dispatcher** in `src/neural_data_decoding/sweeps/dispatcher.py` — 147 entries from the MATLAB SLURMPARAMETERS file, flat sweep_index 1..147 (21 tests)
+5. ✅ **D.3 — CLI extensions** to `train` subcommand: `--sweep-index`, `--session-run-idx`, `--session`, `--override` (11 tests in `test_sweep_cli_helpers.py`)
+6. **D.4 — Start-of-run banner** matching MATLAB's pattern (cfg dump, datetime, GPU table, session/fold identifier, git SHA, user identifier) — pending
+7. ✅ **D.5 — `_identify_user()` helper** in `sweeps/user_identity.py` — `$USER` ∈ {cgerrity, gerritcg} OR git email match → auto-default SLURM `--mail-user` (4 tests)
+8. ✅ **D.6 — `.slurm` template generator** via the `sweep-emit-slurm` subcommand — embeds (sweep_index, SC, IDX, SessionRunIDX) in the output filename for MATLAB log cross-reference; `set -euo pipefail` for fail-fast; auto-gated mail-user (17 tests)
 9. **D.7 — `configs/target_milestone/real_data_base.yaml`** (real-data analog of `C_optimal_synthetic.yaml`)
 10. **D.8 — Smoke run** end-to-end on `results/Decision/Decision_Data_0000011.mat` + `Target_0000011.mat`
 11. Commit + push

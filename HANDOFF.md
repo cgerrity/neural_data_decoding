@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **705 passed, 4 deselected** by default; **4 passed** under
+Expected: **758 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -85,7 +85,7 @@ neural_data_decoding/
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
 | CC — Extra-credit features | ✅ **all 8 sub-milestones done** — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.6 (offset/scale augmentation) + CC.7 (unweighted loss) + CC.8 (SLURM sweep coverage audit + 24 integration tests) | See `sweeps/parameter_coverage.py` for the full 47-variable support matrix |
-| D — Cluster deployment | 🚧 In progress — D.1 `MatFileTrialDataset` complete (24 tests, real-fixture parity); D.2-D.8 pending. See [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md) for the full plan | D.1 windowing parity verified by direct array indexing |
+| D — Cluster deployment | 🚧 In progress — D.1-D.6 complete (real-data dataset, 147-entry sweep dispatcher, CLI overrides, `.slurm` template generator, user identification); D.7-D.8 pending (real-data base config + smoke run). See [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md) | D.1 windowing parity by direct indexing; D.2 verified against MATLAB SLURMPARAMETERS_cgg_runAutoEncoder_v2.m |
 
 Milestone C status — what's done
 
@@ -575,8 +575,14 @@ Get the Python port runnable on real GPU hardware:
 - **Real-data dataset** ✅ — `MatFileTrialDataset` lives at
   `src/neural_data_decoding/data/mat_dataset.py`, validated against
   `results/Decision/Decision_Data_0000011.mat` (24 tests pass).
-- **Sweep dispatcher + CLI + `.slurm` template generator** —
-  see D.2-D.6 in [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md).
+- **Sweep dispatcher + CLI overrides + `.slurm` template generator** ✅ —
+  147-entry port of `SLURMPARAMETERS_cgg_runAutoEncoder_v2.m` in
+  `src/neural_data_decoding/sweeps/dispatcher.py`; CLI flags
+  `--sweep-index N`, `--session-run-idx K`, `--session NAME`,
+  `--override KEY=VALUE` extend the `train` subcommand; new
+  `sweep-emit-slurm` subcommand renders ACCRE-ready `.slurm` files
+  with user-identification-gated `--mail-user` defaults.
+- **Real-data base YAML + end-to-end smoke run** — D.7 / D.8 pending.
 
 ### What "done" looks like across all of these
 

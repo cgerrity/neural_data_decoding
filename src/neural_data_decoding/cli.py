@@ -47,6 +47,22 @@ from .models.composite import (
     build_variational_composite,
 )
 from .models.registry import build_classifier, build_encoder
+from .sweeps.cli_helpers import (
+    apply_overrides,
+    apply_sweep_index,
+    decompose_session_run_idx,
+)
+from .sweeps.slurm_template import (
+    DEFAULT_ARRAY_THROTTLE,
+    DEFAULT_CPUS_PER_TASK,
+    DEFAULT_MEM,
+    DEFAULT_NUM_FOLDS,
+    DEFAULT_NUM_SESSIONS,
+    DEFAULT_OUTPUT_DIR_REL,
+    DEFAULT_TIME,
+    SlurmTemplateOptions,
+    write_slurm_template,
+)
 from .training.accumulation import get_accumulation_size_for_current_system
 from .training.checkpoint import has_existing_checkpoint
 from .training.freezing import (
@@ -110,10 +126,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_common_args(check_p)
 
-    sub.add_parser(
-        "sweep",
-        help="(stub — Milestone D) Launch a hyperparameter sweep via submitit or Ray Tune.",
+    emit_p = sub.add_parser(
+        "sweep-emit-slurm",
+        help="Render a SLURM array .slurm file for a given sweep index.",
     )
+    _add_sweep_emit_args(emit_p)
 
     args = parser.parse_args(argv)
     if args.command is None:
@@ -123,16 +140,177 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_train(args)
     if args.command == "check-existing":
         return _cmd_check_existing(args)
-    if args.command == "sweep":
-        print("sweep is not yet implemented (Milestone D).")
-        return 1
+    if args.command == "sweep-emit-slurm":
+        return _cmd_sweep_emit_slurm(args)
 
     parser.print_help()
     return 0
 
 
+def _add_sweep_emit_args(p: argparse.ArgumentParser) -> None:
+    """Attach the flag set for the ``sweep-emit-slurm`` subcommand."""
+    p.add_argument(
+        "--sweep-index",
+        type=int,
+        required=True,
+        help="Sweep entry index (1-based) to bake into the .slurm script.",
+    )
+    p.add_argument(
+        "--config-name",
+        required=True,
+        help="Name of a YAML file in configs/target_milestone/ (without .yaml).",
+    )
+    p.add_argument(
+        "--output-path",
+        type=Path,
+        required=True,
+        help="Where to write the .slurm file (parents are created as needed).",
+    )
+    p.add_argument(
+        "--num-sessions",
+        type=int,
+        default=DEFAULT_NUM_SESSIONS,
+        help=f"Cohort session count (default: {DEFAULT_NUM_SESSIONS}).",
+    )
+    p.add_argument(
+        "--num-folds",
+        type=int,
+        default=DEFAULT_NUM_FOLDS,
+        help=f"K-fold count (default: {DEFAULT_NUM_FOLDS}).",
+    )
+    p.add_argument(
+        "--time",
+        type=str,
+        default=DEFAULT_TIME,
+        help=f"SLURM --time value (default: {DEFAULT_TIME}).",
+    )
+    p.add_argument(
+        "--mem",
+        type=str,
+        default=DEFAULT_MEM,
+        help=f"SLURM --mem value (default: {DEFAULT_MEM}).",
+    )
+    p.add_argument(
+        "--cpus-per-task",
+        type=int,
+        default=DEFAULT_CPUS_PER_TASK,
+        help=f"SLURM --cpus-per-task (default: {DEFAULT_CPUS_PER_TASK}).",
+    )
+    p.add_argument(
+        "--output-dir",
+        type=str,
+        default=DEFAULT_OUTPUT_DIR_REL,
+        help=(
+            "SLURM --output target directory inside the job. Default: "
+            f"{DEFAULT_OUTPUT_DIR_REL}/ (matches the MATLAB pipeline convention)."
+        ),
+    )
+    p.add_argument(
+        "--array-throttle",
+        type=int,
+        default=DEFAULT_ARRAY_THROTTLE,
+        help=(
+            f"Concurrent-task throttle for the SLURM array (default: "
+            f"{DEFAULT_ARRAY_THROTTLE} — sequential). Becomes the '%%K' "
+            "suffix on the --array spec."
+        ),
+    )
+    p.add_argument(
+        "--mail-user",
+        type=str,
+        default=None,
+        help=(
+            "Override --mail-user. When omitted, the helper auto-detects "
+            "the project owner via $USER / git email; for anyone else the "
+            "mail line is left out of the script."
+        ),
+    )
+    p.add_argument(
+        "--repo-dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional absolute path to inject as the 'cd ...' line before "
+            "venv activation. Use this when the script will be sbatched "
+            "from somewhere other than the repo root."
+        ),
+    )
+    p.add_argument(
+        "--extra-override",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Extra --override flag forwarded to the inner train command. "
+            "Repeatable. Use to pin real-data paths (--extra-override "
+            "data_dir=/scratch/...)."
+        ),
+    )
+
+
+def _cmd_sweep_emit_slurm(args: argparse.Namespace) -> int:
+    """Render and write a sweep ``.slurm`` array script."""
+    options = SlurmTemplateOptions(
+        sweep_index=int(args.sweep_index),
+        config_name=str(args.config_name),
+        num_sessions=int(args.num_sessions),
+        num_folds=int(args.num_folds),
+        cpus_per_task=int(args.cpus_per_task),
+        time=str(args.time),
+        mem=str(args.mem),
+        output_dir=str(args.output_dir),
+        array_throttle=int(args.array_throttle),
+        mail_user=args.mail_user,
+        repo_dir=args.repo_dir,
+        extra_overrides=tuple(args.extra_override),
+    )
+    written = write_slurm_template(options, Path(args.output_path))
+    print(f"Wrote {written}")
+    return 0
+
+
+def _apply_cfg_flags(cfg: DictConfig, args: argparse.Namespace) -> None:
+    """Apply CLI flags to ``cfg`` in the precedence order documented per-flag.
+
+    Order (later wins):
+
+    1. ``--sweep-index`` — bundled override set from the dispatcher table.
+    2. ``--session-run-idx`` — sets ``cfg.session_run_idx`` (the dataset
+       loader decomposes it once it knows ``num_sessions``); also sets
+       ``cfg.fold`` from the decomposition assuming a 25-session cohort
+       so single-session smoke runs work without the loader being live.
+    3. ``--session`` — sets ``cfg.subset`` to the named session
+       (hyphens → underscores).
+    4. ``--override KEY=VALUE`` — ad-hoc cfg surgery (escape hatch).
+    5. ``--fold`` — final say on fold index (wins over sweep-index
+       and session-run-idx).
+
+    The ``cfg.sweep_index`` / ``cfg.session_run_idx`` fields end up in
+    the EncodingParameters.yaml so the run can be reproduced.
+    """
+    if args.sweep_index is not None:
+        description, notes = apply_sweep_index(cfg, int(args.sweep_index))
+        cfg.sweep_index = int(args.sweep_index)
+        cfg.sweep_description = description
+        for note in notes:
+            print(f"[sweep #{args.sweep_index}] note: {note}", file=sys.stderr)
+    if args.session_run_idx is not None:
+        cfg.session_run_idx = int(args.session_run_idx)
+        # Heuristic fold derivation against the default 25-session cohort
+        # so synthetic smoke runs still pick a useful fold; the real-data
+        # loader recomputes this against the actual session count.
+        decomposition = decompose_session_run_idx(int(args.session_run_idx), 25)
+        cfg.fold = decomposition.fold
+    if args.session is not None:
+        cfg.subset = str(args.session).replace("-", "_")
+    if args.override:
+        apply_overrides(cfg, list(args.override))
+    if args.fold is not None:
+        cfg.fold = int(args.fold)
+
+
 def _add_common_args(p: argparse.ArgumentParser) -> None:
-    """Attach the ``--config-name`` / ``--fold`` / ``--output-root`` triple."""
+    """Attach the standard config + sweep flag group."""
     p.add_argument(
         "--config-name",
         required=True,
@@ -150,13 +328,56 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
             "(gitignored). Set to <ACCRE_DATA>/... for cluster-equivalent paths."
         ),
     )
+    p.add_argument(
+        "--sweep-index",
+        type=int,
+        default=None,
+        help=(
+            "Apply sweep entry N (1-based) from the SLURMPARAMETERS port. "
+            "Bundles cfg overrides; see "
+            "neural_data_decoding.sweeps.dispatcher for the full table."
+        ),
+    )
+    p.add_argument(
+        "--session-run-idx",
+        type=int,
+        default=None,
+        help=(
+            "Flat MATLAB-style index K decomposed into (session_idx, fold) "
+            "via session_idx = (K-1) %% NumSessions + 1 and "
+            "fold = (K-1) // NumSessions + 1. Preserves MATLAB's "
+            "session-inside-fold ordering so the cohort's first-fold accuracy "
+            "lands across every session before any second-fold runs start."
+        ),
+    )
+    p.add_argument(
+        "--session",
+        type=str,
+        default=None,
+        help=(
+            "Single-session mode: set cfg.subset to this session name. "
+            "Hyphens are converted to underscores to match the Target.SessionName "
+            "format used inside .mat files."
+        ),
+    )
+    p.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Ad-hoc cfg override (repeatable). KEY is a Python cfg field "
+            "(snake_case); VALUE is parsed via ast.literal_eval first, "
+            "then falls back to string. Wins over --sweep-index. Example: "
+            "--override data_width=50 --override hidden_sizes=[500,250]."
+        ),
+    )
 
 
 def _cmd_train(args: argparse.Namespace) -> int:
     """Implementation of the ``train`` subcommand."""
     cfg = _load_config(args.config_name)
-    if args.fold is not None:
-        cfg.fold = int(args.fold)
+    _apply_cfg_flags(cfg, args)
 
     result_dir = _resolve_result_dir(cfg, args.output_root)
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -467,8 +688,7 @@ def _print_unsupervised_epoch(entry: Any) -> None:
 def _cmd_check_existing(args: argparse.Namespace) -> int:
     """Implementation of the ``check-existing`` subcommand."""
     cfg = _load_config(args.config_name)
-    if args.fold is not None:
-        cfg.fold = int(args.fold)
+    _apply_cfg_flags(cfg, args)
     result_dir = _resolve_result_dir(cfg, args.output_root)
     found = has_existing_checkpoint(result_dir)
     payload: dict[str, Any] = {
