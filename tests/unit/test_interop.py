@@ -11,7 +11,8 @@ import scipy.io
 from neural_data_decoding.interop import (
     ENCODING_PARAMETERS_FILENAME,
     VALIDATION_CM_TABLE_FILENAME,
-    build_result_dir,
+    MatlabRunDirs,
+    build_matlab_run_dirs,
     read_encoding_parameters_yaml,
     write_cm_table_mat,
     write_encoding_parameters_yaml,
@@ -19,104 +20,266 @@ from neural_data_decoding.interop import (
 from neural_data_decoding.interop.parameter_yaml import translate_key
 
 
-# ───────────────────────── folder_hierarchy ─────────────────────────
+# ───────────────────────── folder_hierarchy_matlab ─────────────────────────
 
 
-def test_build_result_dir_layout(tmp_path: Path) -> None:
-    """Each hyperparameter becomes its own path component, in the documented order."""
-    path = build_result_dir(
-        base_dir=tmp_path,
-        epoch="Synthetic_Easy",
-        target="Dimension",
-        model_name="Logistic Regression",
-        fold=1,
-        identifying_config={"lr": 0.01},
+def _optimal_cfg(**overrides: object) -> dict[str, object]:
+    """Return an Optimal-like cfg dict for the folder builder."""
+    base: dict[str, object] = {
+        "fold": 1,
+        "epoch": "Decision",
+        "target": "Dimension",
+        "model_name": "GRU",
+        "is_variational": True,
+        "encoder_output_type": "Stochastic",
+        "activation": "",
+        "dropout": 0.5,
+        "want_normalization": False,
+        "bottle_neck_depth": 1,
+        "data_width": 100,
+        "window_stride": 50,
+        "start_end_percent": [None, None],
+        "normalization": "Channel - Z-Score",
+        "hidden_sizes": [1000, 500, 250],
+        "initial_learning_rate": 1e-3,
+        "gradient_threshold": 100.0,
+        "gradient_clip_type": "Global",
+        "optimizer": "ADAM",
+        "l2_factor": 1e-4,
+        "mini_batch_size": 100,
+        "max_worker_mini_batch_size": 100,
+        "want_stratified_partition": True,
+        "std_channel_offset": 0.03,
+        "std_white_noise": 0.015,
+        "std_random_walk": 7e-4,
+        "std_time_shift": 100.0,
+        "want_separate_time_shift": True,
+        "subset": True,
+        "loss_type_decoder": "MSE",
+        "num_epochs_autoencoder": 0,
+        "prior_proportion": 0.9,
+        "rescale_loss_epoch": 0,
+        "weight_reconstruction": 100.0,
+        "weight_classification": 10.0,
+        "weight_kl": 1.0,
+        "weight_confidence": 1.0,
+        "confidence_type": ["Trial", "Task"],
+        "want_batch_correction": False,
+        "dynamic_parameter_set": "Soft Three-Stage Curriculum - Shortened",
+        "stitching_and_fusion_layer": "",
+        "classifier_name": "Deep LSTM - Dropout 0.5",
+        "classifier_hidden_size": [250, 100, 50],
+        "weighted_loss": "Inverse",
+        "multiple_instance_learning_type": "MIL",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_matlab_run_dirs_classifier_leaf_is_fold_N(tmp_path: Path) -> None:
+    """Classifier path ends in ``Classifier - ... / Fold_{N}``."""
+    dirs = build_matlab_run_dirs(base_dir=tmp_path, cfg=_optimal_cfg(fold=3))
+    assert dirs.classifier_fold.parts[-1] == "Fold_3"
+    assert dirs.classifier_fold.parts[-2].startswith("Classifier - ")
+
+
+def test_matlab_run_dirs_autoencoder_branch_uses_information_label(
+    tmp_path: Path,
+) -> None:
+    """Autoencoder fold parallels classifier under ``Information / Fold_{N}``."""
+    dirs = build_matlab_run_dirs(base_dir=tmp_path, cfg=_optimal_cfg(fold=7))
+    assert dirs.autoencoder_fold.parts[-1] == "Fold_7"
+    assert dirs.autoencoder_fold.parts[-2] == "Information"
+
+
+def test_matlab_run_dirs_top_layout_matches_aggregate_data_chain(
+    tmp_path: Path,
+) -> None:
+    """The shallow chain is ``Aggregate Data / Epoched Data / Epoch / Encoding / Target / ModelName``."""
+    dirs = build_matlab_run_dirs(base_dir=tmp_path, cfg=_optimal_cfg())
+    parts = dirs.classifier_fold.parts
+    # Strip tmp_path prefix
+    start = len(tmp_path.parts)
+    assert parts[start:start + 6] == (
+        "Aggregate Data",
+        "Epoched Data",
+        "Decision",
+        "Encoding",
+        "Dimension",
+        "GRU",
     )
-    parts = path.parts
-    # tmp_path / Synthetic_Easy / Dimension / Logistic Regression / cfg-<hash> / fold-1
-    assert parts[-5] == "Synthetic_Easy"
-    assert parts[-4] == "Dimension"
-    assert parts[-3] == "Logistic Regression"
-    assert parts[-2].startswith("cfg-")
-    assert parts[-1] == "fold-1"
 
 
-def test_build_result_dir_is_deterministic(tmp_path: Path) -> None:
-    """Same config + same fold → byte-identical path."""
-
-    def _call() -> Path:
-        return build_result_dir(
-            base_dir=tmp_path,
-            epoch="Decision",
-            target="Dimension",
-            model_name="GRU",
-            fold=2,
-            identifying_config={"batch_size": 32, "lr": 0.001},
-        )
-
-    assert _call() == _call()
-
-
-def test_build_result_dir_hash_changes_on_config_change(tmp_path: Path) -> None:
-    """A different identifying_config produces a different hash bucket."""
-    a = build_result_dir(
-        base_dir=tmp_path,
-        epoch="Decision",
-        target="Dimension",
-        model_name="GRU",
-        fold=1,
-        identifying_config={"lr": 0.001},
+def test_model_parameters_optimal_render() -> None:
+    """The Optimal config renders ``ModelParameters`` exactly as MATLAB does."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    name = dirs.classifier_fold.parts[7]   # ModelParameters position
+    assert name == (
+        "Variational - Stochastic Encoder ~ Dropout - 5.00e-01 "
+        "~ Bottle Neck Depth - 1"
     )
-    b = build_result_dir(
-        base_dir=tmp_path,
-        epoch="Decision",
-        target="Dimension",
-        model_name="GRU",
-        fold=1,
-        identifying_config={"lr": 0.01},
+
+
+def test_width_stride_renders_data_width_and_window_stride() -> None:
+    """``Data Width - 100 ~ Window Stride - 50`` for the Optimal default."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    assert dirs.classifier_fold.parts[8] == "Data Width - 100 ~ Window Stride - 50"
+
+
+def test_hidden_size_hyphen_joins_multi_layer_lists() -> None:
+    """``[1000, 500, 250]`` renders as ``"Hidden Size - 1000-500-250"``."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    assert dirs.classifier_fold.parts[10] == "Hidden Size - 1000-500-250"
+
+
+def test_learning_combines_lr_grad_optimizer_l2() -> None:
+    """``Learning`` rolls up the LR, gradient threshold + clip type, optimizer, L2."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    assert dirs.classifier_fold.parts[11] == (
+        "Initial Learning Rate - 1.00e-03 ~ Gradient Threshold - 1.00e+02 - Global "
+        "~ Optimizer - ADAM ~ L2 Factor - 1.00e-04"
     )
-    assert a != b
 
 
-def test_build_result_dir_key_order_does_not_matter(tmp_path: Path) -> None:
-    """Insertion order of the config dict must not affect the hash."""
-    a = build_result_dir(
-        base_dir=tmp_path,
-        epoch="Decision",
-        target="Dimension",
-        model_name="GRU",
-        fold=1,
-        identifying_config={"a": 1, "b": 2},
+def test_mini_batch_flags_stratification() -> None:
+    """``Hierarchically Stratified`` shows up for the Optimal default."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    assert dirs.classifier_fold.parts[12] == (
+        "Mini Batch Size - 100 ~ Max Accumulation - 100 ~ Hierarchically Stratified"
     )
-    b = build_result_dir(
-        base_dir=tmp_path,
-        epoch="Decision",
-        target="Dimension",
-        model_name="GRU",
-        fold=1,
-        identifying_config={"b": 2, "a": 1},
+
+
+def test_data_augmentation_emits_separate_time_shift_when_flag_set() -> None:
+    """``Separate TimeShift`` label appears when ``want_separate_time_shift`` is True."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    assert dirs.classifier_fold.parts[13] == (
+        "Channel Offset - 3.00e-02 ~ White Noise - 1.50e-02 ~ "
+        "Random Walk - 7.00e-04 ~ Separate TimeShift - 1.00e+02"
     )
-    assert a == b
 
 
-def test_build_result_dir_rejects_fold_zero(tmp_path: Path) -> None:
-    """MATLAB is 1-indexed; 0 is a programming error."""
+def test_is_subset_flag_uses_string_when_session_name_set() -> None:
+    """``cfg.subset = '<session>'`` puts the literal session name as the folder."""
+    cfg = _optimal_cfg(subset="Wo_Probe_01_23_02_13_003_01")
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=cfg)
+    assert dirs.classifier_fold.parts[14] == "Wo_Probe_01_23_02_13_003_01"
+
+
+def test_is_subset_label_default_for_bool_true() -> None:
+    """``cfg.subset = True`` → ``"Subset"`` folder."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg(subset=True))
+    assert dirs.classifier_fold.parts[14] == "Subset"
+
+
+def test_is_subset_label_for_bool_false() -> None:
+    """``cfg.subset = False`` → ``"All Sessions"`` folder."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg(subset=False))
+    assert dirs.classifier_fold.parts[14] == "All Sessions"
+
+
+def test_autoencoder_with_zero_epochs_still_renders_epochs_label() -> None:
+    """``AutoEncoder - Epochs - 0`` for ``num_epochs_autoencoder = 0``."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    assert dirs.classifier_fold.parts[15] == (
+        "AutoEncoder - Epochs - 0 ~ Loss Function - MSE "
+        "~ Prior Proportion - 9.00e-01 ~ Rescale Epochs - 0"
+    )
+
+
+def test_loss_renders_confidence_with_sorted_and_joined_types() -> None:
+    """``Weight Task and Trial Confidence`` — confidence types alphabetized."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    assert dirs.classifier_fold.parts[16] == (
+        "Weight Reconstruction - 1.00e+02 ~ Weight Classification - 1.00e+01 "
+        "~ Weight KL - 1.00e+00 ~ Weight Task and Trial Confidence - 1.00e+00"
+    )
+
+
+def test_loss_omits_confidence_when_weight_is_zero() -> None:
+    """Confidence label disappears entirely for ``weight_confidence == 0``."""
+    cfg = _optimal_cfg(weight_confidence=0, confidence_type=[])
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=cfg)
+    assert dirs.classifier_fold.parts[16] == (
+        "Weight Reconstruction - 1.00e+02 ~ Weight Classification - 1.00e+01 "
+        "~ Weight KL - 1.00e+00"
+    )
+
+
+def test_dynamic_includes_stitching_and_fusion_when_set() -> None:
+    """``S and F`` segment appended when ``stitching_and_fusion_layer != ''``."""
+    cfg = _optimal_cfg(stitching_and_fusion_layer="Default")
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=cfg)
+    assert dirs.classifier_fold.parts[17] == (
+        "Dynamic Set - Soft Three-Stage Curriculum - Shortened ~ S and F - Default"
+    )
+
+
+def test_dynamic_omits_stitching_when_empty() -> None:
+    """No S+F segment when ``stitching_and_fusion_layer`` is ``''``."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    assert dirs.classifier_fold.parts[17] == (
+        "Dynamic Set - Soft Three-Stage Curriculum - Shortened"
+    )
+
+
+def test_classifier_renders_with_mil_marker() -> None:
+    """``~ SCT`` suffix when ``multiple_instance_learning_type = 'MIL'``."""
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=_optimal_cfg())
+    assert dirs.classifier_fold.parts[18] == (
+        "Classifier - Deep LSTM - Dropout 0.5 ~ Hidden Size - 250-100-50 "
+        "~ Weighted Loss - Inverse ~ SCT"
+    )
+
+
+def test_classifier_omits_sct_when_no_mil() -> None:
+    """No ``SCT`` suffix without MIL."""
+    cfg = _optimal_cfg(multiple_instance_learning_type="None")
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=cfg)
+    assert dirs.classifier_fold.parts[18] == (
+        "Classifier - Deep LSTM - Dropout 0.5 ~ Hidden Size - 250-100-50 "
+        "~ Weighted Loss - Inverse"
+    )
+
+
+def test_matlab_run_dirs_returns_consistent_encoding_dir(tmp_path: Path) -> None:
+    """All three returned paths share the same Encoding/{Target} ancestor."""
+    dirs = build_matlab_run_dirs(base_dir=tmp_path, cfg=_optimal_cfg())
+    assert isinstance(dirs, MatlabRunDirs)
+    assert dirs.encoding_dir == dirs.classifier_fold.parents[len(dirs.classifier_fold.parts) - len(dirs.encoding_dir.parts) - 1]
+
+
+def test_rejects_fold_zero(tmp_path: Path) -> None:
+    """MATLAB is 1-indexed."""
     with pytest.raises(ValueError, match="fold must be >= 1"):
-        build_result_dir(
-            base_dir=tmp_path,
-            epoch="Decision",
-            target="Dimension",
-            model_name="GRU",
-            fold=0,
-        )
+        build_matlab_run_dirs(base_dir=tmp_path, cfg=_optimal_cfg(fold=0))
 
 
-def test_build_result_dir_rejects_empty_components(tmp_path: Path) -> None:
-    """An empty Epoch / Target / ModelName is silently catastrophic; reject."""
+def test_rejects_empty_required_fields(tmp_path: Path) -> None:
+    """An empty Epoch / Target / ModelName fails fast."""
     with pytest.raises(ValueError, match="must be a non-empty string"):
-        build_result_dir(
-            base_dir=tmp_path, epoch="", target="Dimension", model_name="GRU", fold=1
-        )
+        build_matlab_run_dirs(base_dir=tmp_path, cfg=_optimal_cfg(epoch=""))
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        build_matlab_run_dirs(base_dir=tmp_path, cfg=_optimal_cfg(target=""))
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        build_matlab_run_dirs(base_dir=tmp_path, cfg=_optimal_cfg(model_name=""))
+
+
+def test_omegaconf_input_is_accepted(tmp_path: Path) -> None:
+    """A DictConfig (not just dict) is a valid cfg input."""
+    from omegaconf import OmegaConf
+
+    cfg = OmegaConf.create(_optimal_cfg())
+    dirs = build_matlab_run_dirs(base_dir=tmp_path, cfg=cfg)
+    assert "Fold_1" in dirs.classifier_fold.parts
+
+
+def test_start_end_percent_appends_time_range() -> None:
+    """A set ``start_end_percent`` adds the ``Time Percent`` segment."""
+    cfg = _optimal_cfg(start_end_percent=[0.0, 0.5])
+    dirs = build_matlab_run_dirs(base_dir=Path("/"), cfg=cfg)
+    assert dirs.classifier_fold.parts[8] == (
+        "Data Width - 100 ~ Window Stride - 50 ~ Time Percent - [0.0, 0.5]"
+    )
 
 
 # ───────────────────────── cm_table_format ─────────────────────────

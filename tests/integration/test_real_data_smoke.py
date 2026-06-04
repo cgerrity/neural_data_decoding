@@ -8,10 +8,22 @@ crashing.
 
 Skipped automatically when the sample fixture is missing — the rest of
 the unit suite still gates the components individually.
+
+The output-root uses a short ``/tmp/ndd_smoke_<pid>_<id>`` prefix
+rather than ``tmp_path`` because the MATLAB-parity long-folder
+hierarchy (~1100 chars) can exceed macOS PATH_MAX 1024 when
+combined with the deeper ``/private/var/folders/...`` pytest tmp
+prefix. ACCRE Linux (PATH_MAX 4096) handles the full chain
+natively, so this is dev-machine ergonomics, not a real-pipeline
+constraint.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
+import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -31,14 +43,32 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_real_data_base_runs_end_to_end(tmp_path: Path) -> None:
+@pytest.fixture
+def short_tmp_path() -> "Iterator[Path]":
+    """``/tmp/ndd_smoke_<pid>_<uuid>`` — short enough for the MATLAB-folder chain.
+
+    macOS pytest tmp paths (``/private/var/folders/...``) push the
+    base prefix past 100 chars, which combined with the 1000-char
+    MATLAB-parity output tree exceeds PATH_MAX. Using ``/tmp``
+    directly trims the prefix to ~25 chars and keeps the full path
+    under the limit on macOS dev machines.
+    """
+    base = Path("/tmp") / f"ndd_smoke_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    base.mkdir(parents=True, exist_ok=True)
+    try:
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_real_data_base_runs_end_to_end(short_tmp_path: Path) -> None:
     """``train --config-name real_data_base`` completes with the smoke fixture.
 
     Pinned outputs: a non-empty result directory containing
     ``CM_Table_Validation.mat``, ``CM_Table.mat``, ``EncodingParameters.yaml``,
     plus the ``optimal_state.pt`` / ``current_state.pt`` snapshots.
     """
-    output_root = tmp_path / "results"
+    output_root = short_tmp_path / "results"
     argv = [
         "train",
         "--config-name", "real_data_base",
@@ -75,13 +105,15 @@ def test_real_data_base_runs_end_to_end(tmp_path: Path) -> None:
     assert optimal_state, "no optimal_state.pt written"
 
 
-def test_real_data_session_filter_keeps_pipeline_running(tmp_path: Path) -> None:
+def test_real_data_session_filter_keeps_pipeline_running(
+    short_tmp_path: Path,
+) -> None:
     """``--session <name>`` (matching the fixture's session) does not crash.
 
     The single fixture session is ``Wo_Probe_01_23_02_13_003_01``; filtering
     to it should keep the one trial and the run proceeds normally.
     """
-    output_root = tmp_path / "results"
+    output_root = short_tmp_path / "results"
     argv = [
         "train",
         "--config-name", "real_data_base",
