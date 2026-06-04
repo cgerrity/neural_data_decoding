@@ -45,7 +45,7 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **760 passed, 4 deselected** by default; **4 passed** under
+Expected: **774 passed, 4 deselected** by default; **4 passed** under
 `-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
 the cosmetic Material-team blog notice).
 
@@ -85,7 +85,7 @@ neural_data_decoding/
 | B — GRU + Classifier | ✅ Complete + smoke-runnable | T2 encoder ~1e-7; composite ~1e-9 |
 | C — Full Optimal VAE | ✅ **Core + curriculum + two-stage + confidence + Eq. 2 CE + MIL + accumulation complete** | VAE-core T2 ~1e-6; confidence kernel ~1e-10; Beta P-controller ~1e-12; curriculum interpolator ~1e-12; MIL+Eq. 2 CE analytical; accumulation gradient parity ~1e-6 |
 | CC — Extra-credit features | ✅ **all 8 sub-milestones done** — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.6 (offset/scale augmentation) + CC.7 (unweighted loss) + CC.8 (SLURM sweep coverage audit + 24 integration tests) | See `sweeps/parameter_coverage.py` for the full 47-variable support matrix |
-| D — Cluster deployment | ✅ **D.1-D.3, D.5-D.8 complete; D.4 (banner) is the only pending sub-item.** Real-data dataset, 147-entry sweep dispatcher, CLI overrides, `.slurm` template generator, user identification, `real_data_base.yaml` config, end-to-end smoke run on `Decision_Data_0000011.mat`. See [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md) | D.1 windowing parity by direct indexing; D.2 verified against MATLAB SLURMPARAMETERS_cgg_runAutoEncoder_v2.m; D.8 trains + writes both CM_Tables end-to-end |
+| D — Cluster deployment | ✅ **Complete (all 8 sub-items).** Real-data dataset, 147-entry sweep dispatcher, CLI overrides, start-of-run banner, `.slurm` template generator, user identification, `real_data_base.yaml` config, end-to-end smoke run on `Decision_Data_0000011.mat`. See [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md) | D.1 windowing parity by direct indexing; D.2 verified against MATLAB SLURMPARAMETERS_cgg_runAutoEncoder_v2.m; D.8 trains + writes both CM_Tables end-to-end |
 
 Milestone C status — what's done
 
@@ -588,9 +588,11 @@ Get the Python port runnable on real GPU hardware:
   CLI auto-routes to `MatFileTrialDataset` when `cfg.data_dir` is set;
   two integration tests in `tests/integration/test_real_data_smoke.py`
   pin the end-to-end path against `Decision_Data_0000011.mat`.
-- **Start-of-run banner (D.4)** — only remaining D sub-item; would
-  match `cgg_runAutoEncoder.m` lines 320-323 (cfg dump, datetime,
-  GPU table, session/fold identifier, git SHA, user).
+- **Start-of-run banner (D.4)** ✅ —
+  `sweeps/banner.py` collects timestamp / user / git SHA + branch /
+  torch version / sweep entry / fold / subset / result-dir / trial-
+  split counts / sample shape / cfg headline / GPU table; rendered
+  to stderr at the top of every train run.
 
 ### What "done" looks like across all of these
 

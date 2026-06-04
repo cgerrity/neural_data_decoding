@@ -1,5 +1,10 @@
 """SLURM sweep dispatcher + ``.slurm`` template generator + parameter coverage."""
 
+from neural_data_decoding.sweeps.banner import (
+    RunBannerData,
+    collect_banner_data,
+    render_banner,
+)
 from neural_data_decoding.sweeps.dispatcher import (
     SWEEP_ENTRIES,
     SweepEntry,
@@ -20,15 +25,18 @@ from neural_data_decoding.sweeps.user_identity import (
 )
 
 __all__ = [
+    "RunBannerData",
     "SWEEP_ENTRIES",
     "SlurmTemplateOptions",
     "SweepEntry",
     "UserIdentity",
+    "collect_banner_data",
     "identify_user",
     "iter_by_choice",
     "lookup",
     "lookup_by_choice",
     "maybe_default_mail",
+    "render_banner",
     "render_slurm_template",
     "total_sweep_count",
     "write_slurm_template",

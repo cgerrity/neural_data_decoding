@@ -1,6 +1,6 @@
 # Milestone D — Implementation plan
 
-**Status:** in progress (started 2026-06-02).
+**Status:** ✅ complete (started 2026-06-02; finished 2026-06-03).
 
 **Goal:** Python pipeline runs on ACCRE with the same SLURM sweep model the MATLAB pipeline uses. Single-integer sweep index per configuration; per-session iteration is the primary sweep dimension via a `SessionRunIDX` flat index that decomposes to `(session, fold)`.
 
@@ -17,7 +17,7 @@
 3. ✅ **D.1 — `MatFileTrialDataset`** in `src/neural_data_decoding/data/mat_dataset.py` (24 tests, real-fixture parity verified by direct indexing)
 4. ✅ **D.2 — Sweep dispatcher** in `src/neural_data_decoding/sweeps/dispatcher.py` — 147 entries from the MATLAB SLURMPARAMETERS file, flat sweep_index 1..147 (21 tests)
 5. ✅ **D.3 — CLI extensions** to `train` subcommand: `--sweep-index`, `--session-run-idx`, `--session`, `--override` (11 tests in `test_sweep_cli_helpers.py`)
-6. **D.4 — Start-of-run banner** matching MATLAB's pattern (cfg dump, datetime, GPU table, session/fold identifier, git SHA, user identifier) — pending
+6. ✅ **D.4 — Start-of-run banner** in `sweeps/banner.py` — collects timestamp / user / git SHA + branch / torch version / sweep entry / fold / subset / result-dir / trial-split counts / sample shape / cfg headline / GPU table; pure formatter pinned by 14 tests
 7. ✅ **D.5 — `_identify_user()` helper** in `sweeps/user_identity.py` — `$USER` ∈ {cgerrity, gerritcg} OR git email match → auto-default SLURM `--mail-user` (4 tests)
 8. ✅ **D.6 — `.slurm` template generator** via the `sweep-emit-slurm` subcommand — embeds (sweep_index, SC, IDX, SessionRunIDX) in the output filename for MATLAB log cross-reference; `set -euo pipefail` for fail-fast; auto-gated mail-user (17 tests)
 9. ✅ **D.7 — `configs/target_milestone/real_data_base.yaml`** — Hydra config mirroring `C_optimal_synthetic.yaml` against real `.mat` files; required `data_dir` / `target_dir` paths (`???` sentinel) plus per-trial windowing knobs (`data_width`, `window_stride`, `feature_dimensions`, `dimension_indices`). CLI auto-routes to `MatFileTrialDataset` when `cfg.data_dir` is set.

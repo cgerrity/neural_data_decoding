@@ -48,6 +48,7 @@ from .models.composite import (
     build_variational_composite,
 )
 from .models.registry import build_classifier, build_encoder
+from .sweeps.banner import collect_banner_data, render_banner
 from .sweeps.cli_helpers import (
     apply_overrides,
     apply_sweep_index,
@@ -473,6 +474,22 @@ def _cmd_train(args: argparse.Namespace) -> int:
     else:
         num_features = int(cfg.synthetic_num_features)
         num_classes_per_dim = list(cfg.synthetic_num_classes_per_dim)
+
+    # Start-of-run banner — mirrors the diagnostic block at
+    # cgg_runAutoEncoder.m lines 320-323. Printed to stderr so it
+    # never confuses downstream parsers consuming stdout.
+    banner_data = collect_banner_data(
+        config_name=str(args.config_name),
+        cfg=cfg,
+        args=args,
+        result_dir=result_dir,
+        train_ds=train_ds,
+        val_ds=val_ds,
+        test_ds=test_ds,
+        use_real_data=use_real_data,
+        num_classes_per_dim=num_classes_per_dim,
+    )
+    print(render_banner(banner_data), file=sys.stderr, flush=True)
     model = _build_model(
         cfg,
         in_features=num_features,
