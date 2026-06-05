@@ -15,17 +15,58 @@ code, not documentation that gets written after the fact.
 ```bash
 # From the repo root, with the project's venv activated:
 source .venv/bin/activate
-pip install jupyterlab
-jupyter lab notebooks/
+
+# One-time setup: activate the nbstripout git filter so notebook outputs
+# stay out of commits (see "Workflow conventions" below).
+nbstripout --install --attributes .gitattributes
 ```
 
-JupyterLab opens to this `notebooks/` directory; click into any
-module folder and open the `.ipynb` files in order.
+Then open any `.ipynb` under this directory. **Notebook
+[00.1 welcome](00_orientation/00.1_welcome.ipynb#Section-2-—-How-to-actually-run-this-notebook)
+walks through three editor options** — VS Code, JupyterLab, Classic
+Jupyter — including how to attach the venv's Python as the kernel.
 
 The production code that the curriculum references is in
 [`src/neural_data_decoding/`](../src/neural_data_decoding/). The
 notebooks import directly from this package — re-run any cell as you
 read to see live values change.
+
+## Workflow conventions
+
+### Outputs stay out of commits
+
+When you execute a notebook (any IDE, any kernel) Jupyter writes the
+cell outputs back into the `.ipynb` JSON. The repo uses
+[`nbstripout`](https://github.com/kynan/nbstripout) as a git
+clean-filter to remove outputs at commit time so the diffs stay
+readable. The filter is configured in `.gitattributes` but
+**every contributor must run `nbstripout --install` once after
+cloning** — that's what wires the filter into the local
+`.git/config`.
+
+`nbstripout` is already in the project's `pip install -e .[dev]`
+extras (it's a declared dependency), so the activation is the only
+manual step:
+
+```bash
+source .venv/bin/activate
+nbstripout --install --attributes .gitattributes
+```
+
+After that, you can run notebooks freely — the outputs only exist in
+your working tree, never in commits. Verify with `nbstripout --status`.
+
+If you really want to commit a notebook with its outputs intact (rare
+— useful for tutorial demos), pass `--no-verify` to skip the filter
+on that one commit, or use `git add --no-renormalize`.
+
+### Cell IDs
+
+The `_build_notebook.py` helper assigns each cell a short UUID so
+NotebookEdit operations have a stable handle to target. `nbstripout`
+strips these IDs at commit time (they're regenerated on next
+authoring), which is fine — IDs only matter during interactive
+editing, not in the committed history.
 
 ## Notebook template (every notebook follows this structure)
 
