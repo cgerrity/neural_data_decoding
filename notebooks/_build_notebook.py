@@ -37,13 +37,27 @@ def md(source: str) -> dict[str, Any]:
     }
 
 
-def code(source: str) -> dict[str, Any]:
-    """Build a code cell from a source string."""
+def code(source: str, *, raises: bool = False) -> dict[str, Any]:
+    """Build a code cell from a source string.
+
+    Parameters
+    ----------
+    source
+        The cell source.
+    raises
+        When ``True``, tags the cell with ``raises-exception`` so
+        ``jupyter nbconvert --execute`` keeps going past it. Use this
+        for cells that intentionally trigger an error (e.g. demoing
+        what a traceback looks like).
+    """
+    metadata: dict[str, Any] = {}
+    if raises:
+        metadata["tags"] = ["raises-exception"]
     return {
         "cell_type": "code",
         "execution_count": None,
         "id": uuid.uuid4().hex[:8],
-        "metadata": {},
+        "metadata": metadata,
         "outputs": [],
         "source": source.splitlines(keepends=True),
     }

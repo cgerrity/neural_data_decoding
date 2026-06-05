@@ -133,6 +133,7 @@ are done; the arrows above show the recommended sequence.
 | 00.1 | [welcome.ipynb](00_orientation/00.1_welcome.ipynb) | Tour of the curriculum, prerequisite graph, how to use Jupyter |
 | 00.2 | [set_up_your_environment.ipynb](00_orientation/00.2_set_up_your_environment.ipynb) | Install Python, set up venv, install `neural_data_decoding`, hello-world cell |
 | 00.3 | [the_matlab_to_python_mental_model.ipynb](00_orientation/00.3_the_matlab_to_python_mental_model.ipynb) | The biggest mindset shifts (everything-is-an-object, 0-indexing, indentation, namespaces) |
+| 00.4 | [ide_deep_dive.ipynb](00_orientation/00.4_ide_deep_dive.ipynb) | Foolproof setup for VS Code / JupyterLab / Classic, with troubleshooting and decision matrix |
 
 ### Module 01 — Python for MATLAB users
 | # | Notebook | MATLAB analog |
