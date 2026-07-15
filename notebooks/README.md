@@ -103,7 +103,7 @@ so they add no diff noise.
 | Never used a terminal or git | [00.5 the command line](00_orientation/00.5_the_command_line_for_matlab_users.ipynb) | Then [00.6 git](00_orientation/00.6_git_and_github_for_matlab_users.ipynb) and [00.7 packaging](00_orientation/00.7_pip_packaging_and_project_anatomy.ipynb) — no Python knowledge needed for any of them |
 | Want to start your OWN Python DL project | [00.8 the capstone](00_orientation/00.8_build_a_dl_project_from_scratch.ipynb) | It exercises 00.5–00.7; drop back into those when a step needs unpacking |
 | Python basics, no PyTorch | [02.1 numpy vs MATLAB arrays](02_numpy_and_pytorch_basics/02.1_numpy_vs_matlab_arrays.ipynb) | Cover all of Module 02, then jump into the topic you need |
-| Python + PyTorch, new to this codebase | 03.1 dataset vs filedatastore *(not yet authored — start with [02.2 axis conventions](02_numpy_and_pytorch_basics/02.2_array_axis_conventions.ipynb) meanwhile)* | Read the modules in order of the milestone you're working on |
+| Python + PyTorch, new to this codebase | [03.1 dataset vs filedatastore](03_data_pipeline/03.1_dataset_vs_filedatastore.ipynb) | Walk Module 03 (the data pipeline), then read modules in milestone order |
 | Just want to extend the production pipeline | 09.6 extending the pipeline *(not yet authored — see [HANDOFF.md](../HANDOFF.md) meanwhile)* | Drop back into the relevant module when a concept is unfamiliar |
 | Maintaining MATLAB↔Python parity tests | 08.4 the .mat round-trip test *(not yet authored — see `tests/parity/` meanwhile)* | Cross-reference Module 06 (loss orchestration) for the deeper parity points |
 
@@ -176,12 +176,12 @@ are done; the arrows above show the recommended sequence.
 ### Module 03 — Data pipeline (companion to Milestone 0 & A)
 | # | Notebook | References |
 |---|---|---|
-| 03.1 | `dataset_vs_filedatastore.ipynb` | `cgg_loadDataArray` ↔ `data.dataset.SyntheticTrialDataset` / `data.mat_dataset.MatFileTrialDataset` |
-| 03.2 | `dataloader_and_collation.ipynb` | how MATLAB iterates `fileDatastores` vs PyTorch's `DataLoader` |
-| 03.3 | `the_session_balanced_sampler.ipynb` | `cgg_procAllSessionMiniBatchTable` ↔ `data.samplers.SingleSessionBatchSampler` |
-| 03.4 | `kfold_stratification_deep_dive.ipynb` | `cgg_getKFoldPartitions` recursive splitting ↔ Python `data.stratification` |
-| 03.5 | `normalization_recipes.ipynb` | `cgg_selectNormalization` string dispatch ↔ `data.normalization` registry |
-| 03.6 | `augmentation_per_call_contract.ipynb` | why augmentation must re-randomize per `__getitem__` (the silent-parity-loss trap) |
+| 03.1 | [dataset_vs_filedatastore.ipynb](03_data_pipeline/03.1_dataset_vs_filedatastore.ipynb) | `cgg_loadDataArray` ↔ `data.dataset.SyntheticTrialDataset` / `data.mat_dataset.MatFileTrialDataset` |
+| 03.2 | [dataloader_and_collation.ipynb](03_data_pipeline/03.2_dataloader_and_collation.ipynb) | MATLAB `minibatchqueue` vs PyTorch's `DataLoader`; the custom `collate_trials` |
+| 03.3 | [the_session_balanced_sampler.ipynb](03_data_pipeline/03.3_the_session_balanced_sampler.ipynb) | `cgg_procAllSessionMiniBatchTable` ↔ `data.samplers.SingleSessionBatchSampler` |
+| 03.4 | [kfold_stratification_deep_dive.ipynb](03_data_pipeline/03.4_kfold_stratification_deep_dive.ipynb) | `cgg_getKFoldPartitions` recursive splitting ↔ Python `data.stratification` |
+| 03.5 | [normalization_recipes.ipynb](03_data_pipeline/03.5_normalization_recipes.ipynb) | `cgg_selectNormalization` string dispatch ↔ `data.normalization` registry (+ the live/stub reality) |
+| 03.6 | [augmentation_per_call_contract.ipynb](03_data_pipeline/03.6_augmentation_per_call_contract.ipynb) | why augmentation must re-randomize per `__getitem__` (the silent-parity-loss trap) |
 
 ### Module 04 — Architecture (companion to Milestone B)
 | # | Notebook | References |
