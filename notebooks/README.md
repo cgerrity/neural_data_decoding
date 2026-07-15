@@ -168,10 +168,10 @@ are done; the arrows above show the recommended sequence.
 | 02.2 | [array_axis_conventions.ipynb](02_numpy_and_pytorch_basics/02.2_array_axis_conventions.ipynb) | MATLAB's `'SSCTB'` vs PyTorch's `(N, C, H, W)` vs the codebase's `(W, T, A, C)` |
 | 02.3 | [loading_mat_files.ipynb](02_numpy_and_pytorch_basics/02.3_loading_mat_files.ipynb) | `scipy.io.loadmat` vs `mat73` vs `h5py` |
 | 02.4 | [pytorch_tensors_intro.ipynb](02_numpy_and_pytorch_basics/02.4_pytorch_tensors_intro.ipynb) | `torch.Tensor` vs `np.ndarray`, device, dtype |
-| 02.5 | `autograd_basics.ipynb` | `requires_grad`, `.backward()`, computational graphs |
-| 02.6 | `nn_module_vs_layergraph.ipynb` | `layerGraph` / `dlnetwork` vs `nn.Module` / `nn.Sequential` |
-| 02.7 | `optimizers_and_learning_rates.ipynb` | `trainNetwork` options vs `torch.optim.Adam` |
-| 02.8 | `nan_handling.ipynb` | MATLAB's implicit NaN tolerance vs PyTorch's strict propagation |
+| 02.5 | [autograd_basics.ipynb](02_numpy_and_pytorch_basics/02.5_autograd_basics.ipynb) | `requires_grad`, `.backward()`, computational graphs, gradient accumulation |
+| 02.6 | [nn_module_vs_layergraph.ipynb](02_numpy_and_pytorch_basics/02.6_nn_module_vs_layergraph.ipynb) | `layerGraph` / `dlnetwork` vs `nn.Module`; ModuleList trap; state_dict; train/eval |
+| 02.7 | [optimizers_and_learning_rates.ipynb](02_numpy_and_pytorch_basics/02.7_optimizers_and_learning_rates.ipynb) | `trainNetwork` options vs `torch.optim`; schedulers; param groups; weight-decay warning |
+| 02.8 | [nan_handling.ipynb](02_numpy_and_pytorch_basics/02.8_nan_handling.ipynb) | NaN poisoning, masking, and the two-layer defense (Critical Note #38) |
 
 ### Module 03 — Data pipeline (companion to Milestone 0 & A)
 | # | Notebook | References |
