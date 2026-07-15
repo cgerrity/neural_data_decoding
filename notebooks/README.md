@@ -93,9 +93,9 @@ editing, not in the committed history.
 |---|---|---|
 | MATLAB only, no Python | [00.1 welcome](00_orientation/00.1_welcome.ipynb) | Walk through 00 and 01 sequentially before moving to 02 |
 | Python basics, no PyTorch | [02.1 numpy vs MATLAB arrays](02_numpy_and_pytorch_basics/02.1_numpy_vs_matlab_arrays.ipynb) | Cover all of Module 02, then jump into the topic you need |
-| Python + PyTorch, new to this codebase | [03.1 dataset vs filedatastore](03_data_pipeline/03.1_dataset_vs_filedatastore.ipynb) | Read the modules in order of the milestone you're working on |
-| Just want to extend the production pipeline | [09.6 extending the pipeline](09_production_deployment/09.6_extending_the_pipeline.ipynb) | Drop back into the relevant module when a concept is unfamiliar |
-| Maintaining MATLAB↔Python parity tests | [08.4 the .mat round-trip test](08_output_and_analysis/08.4_the_mat_round_trip_test.ipynb) | Cross-reference Module 06 (loss orchestration) for the deeper parity points |
+| Python + PyTorch, new to this codebase | 03.1 dataset vs filedatastore *(not yet authored — start with [02.2 axis conventions](02_numpy_and_pytorch_basics/02.2_array_axis_conventions.ipynb) meanwhile)* | Read the modules in order of the milestone you're working on |
+| Just want to extend the production pipeline | 09.6 extending the pipeline *(not yet authored — see [HANDOFF.md](../HANDOFF.md) meanwhile)* | Drop back into the relevant module when a concept is unfamiliar |
+| Maintaining MATLAB↔Python parity tests | 08.4 the .mat round-trip test *(not yet authored — see `tests/parity/` meanwhile)* | Cross-reference Module 06 (loss orchestration) for the deeper parity points |
 
 ## Prerequisite graph
 
@@ -150,10 +150,10 @@ are done; the arrows above show the recommended sequence.
 ### Module 02 — NumPy & PyTorch basics
 | # | Notebook | MATLAB analog |
 |---|---|---|
-| 02.1 | `numpy_vs_matlab_arrays.ipynb` | array creation, slicing, broadcasting, view vs copy |
-| 02.2 | `array_axis_conventions.ipynb` | MATLAB's `'SSCTB'` vs PyTorch's `(N, C, H, W)` |
-| 02.3 | `loading_mat_files.ipynb` | `scipy.io.loadmat` vs `mat73` vs `h5py` |
-| 02.4 | `pytorch_tensors_intro.ipynb` | `torch.Tensor` vs `np.ndarray`, device, dtype |
+| 02.1 | [numpy_vs_matlab_arrays.ipynb](02_numpy_and_pytorch_basics/02.1_numpy_vs_matlab_arrays.ipynb) | array creation, slicing, broadcasting, view vs copy |
+| 02.2 | [array_axis_conventions.ipynb](02_numpy_and_pytorch_basics/02.2_array_axis_conventions.ipynb) | MATLAB's `'SSCTB'` vs PyTorch's `(N, C, H, W)` vs the codebase's `(W, T, A, C)` |
+| 02.3 | [loading_mat_files.ipynb](02_numpy_and_pytorch_basics/02.3_loading_mat_files.ipynb) | `scipy.io.loadmat` vs `mat73` vs `h5py` |
+| 02.4 | [pytorch_tensors_intro.ipynb](02_numpy_and_pytorch_basics/02.4_pytorch_tensors_intro.ipynb) | `torch.Tensor` vs `np.ndarray`, device, dtype |
 | 02.5 | `autograd_basics.ipynb` | `requires_grad`, `.backward()`, computational graphs |
 | 02.6 | `nn_module_vs_layergraph.ipynb` | `layerGraph` / `dlnetwork` vs `nn.Module` / `nn.Sequential` |
 | 02.7 | `optimizers_and_learning_rates.ipynb` | `trainNetwork` options vs `torch.optim.Adam` |
