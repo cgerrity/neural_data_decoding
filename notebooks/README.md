@@ -56,9 +56,17 @@ nbstripout --install --attributes .gitattributes
 After that, you can run notebooks freely — the outputs only exist in
 your working tree, never in commits. Verify with `nbstripout --status`.
 
-If you really want to commit a notebook with its outputs intact (rare
-— useful for tutorial demos), pass `--no-verify` to skip the filter
-on that one commit, or use `git add --no-renormalize`.
+If you really want to commit a notebook with its outputs intact
+(rare — useful for tutorial demos), bypass the clean filter for that
+one `add` by overriding it:
+
+```bash
+git -c filter.nbstripout.clean=cat add path/to/notebook.ipynb
+git commit -m "..."
+```
+
+(`--no-verify` does NOT work for this — it skips commit hooks, but
+nbstripout is a content *filter*, applied at `git add` time.)
 
 ### Cell IDs
 
@@ -92,6 +100,8 @@ editing, not in the committed history.
 | Background | Start here | Then |
 |---|---|---|
 | MATLAB only, no Python | [00.1 welcome](00_orientation/00.1_welcome.ipynb) | Walk through 00 and 01 sequentially before moving to 02 |
+| Never used a terminal or git | [00.5 the command line](00_orientation/00.5_the_command_line_for_matlab_users.ipynb) | Then [00.6 git](00_orientation/00.6_git_and_github_for_matlab_users.ipynb) and [00.7 packaging](00_orientation/00.7_pip_packaging_and_project_anatomy.ipynb) — no Python knowledge needed for any of them |
+| Want to start your OWN Python DL project | [00.8 the capstone](00_orientation/00.8_build_a_dl_project_from_scratch.ipynb) | It exercises 00.5–00.7; drop back into those when a step needs unpacking |
 | Python basics, no PyTorch | [02.1 numpy vs MATLAB arrays](02_numpy_and_pytorch_basics/02.1_numpy_vs_matlab_arrays.ipynb) | Cover all of Module 02, then jump into the topic you need |
 | Python + PyTorch, new to this codebase | 03.1 dataset vs filedatastore *(not yet authored — start with [02.2 axis conventions](02_numpy_and_pytorch_basics/02.2_array_axis_conventions.ipynb) meanwhile)* | Read the modules in order of the milestone you're working on |
 | Just want to extend the production pipeline | 09.6 extending the pipeline *(not yet authored — see [HANDOFF.md](../HANDOFF.md) meanwhile)* | Drop back into the relevant module when a concept is unfamiliar |
@@ -134,6 +144,10 @@ are done; the arrows above show the recommended sequence.
 | 00.2 | [set_up_your_environment.ipynb](00_orientation/00.2_set_up_your_environment.ipynb) | Install Python, set up venv, install `neural_data_decoding`, hello-world cell |
 | 00.3 | [the_matlab_to_python_mental_model.ipynb](00_orientation/00.3_the_matlab_to_python_mental_model.ipynb) | The biggest mindset shifts (everything-is-an-object, 0-indexing, indentation, namespaces) |
 | 00.4 | [ide_deep_dive.ipynb](00_orientation/00.4_ide_deep_dive.ipynb) | Foolproof setup for VS Code / JupyterLab / Classic, with troubleshooting and decision matrix |
+| 00.5 | [the_command_line_for_matlab_users.ipynb](00_orientation/00.5_the_command_line_for_matlab_users.ipynb) | Shell, paths, env vars, `PATH`, `source`, `.zshrc` — the tool everything else runs through |
+| 00.6 | [git_and_github_for_matlab_users.ipynb](00_orientation/00.6_git_and_github_for_matlab_users.ipynb) | Version control from zero: snapshots, staging, `.gitignore` for DL, branches, merge conflicts, GitHub/PRs |
+| 00.7 | [pip_packaging_and_project_anatomy.ipynb](00_orientation/00.7_pip_packaging_and_project_anatomy.ipynb) | pip/PyPI, version pinning, `pyproject.toml` anatomy, `src/` layout, editable installs, entry points |
+| 00.8 | [build_a_dl_project_from_scratch.ipynb](00_orientation/00.8_build_a_dl_project_from_scratch.ipynb) | **Capstone**: scaffold → git → manifest → model → seeded training → pytest → quality tooling → GPU setup |
 
 ### Module 01 — Python for MATLAB users
 | # | Notebook | MATLAB analog |
