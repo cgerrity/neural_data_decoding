@@ -71,10 +71,10 @@ nbstripout is a content *filter*, applied at `git add` time.)
 ### Cell IDs
 
 The `_build_notebook.py` helper assigns each cell a short UUID so
-NotebookEdit operations have a stable handle to target. `nbstripout`
-strips these IDs at commit time (they're regenerated on next
-authoring), which is fine — IDs only matter during interactive
-editing, not in the committed history.
+notebook-editing tools have a stable handle to target. These IDs are
+committed along with the cells (the nbstripout config here strips
+outputs and execution counts, not IDs) — they're stable across runs,
+so they add no diff noise.
 
 ## Notebook template (every notebook follows this structure)
 
@@ -89,9 +89,9 @@ editing, not in the committed history.
    source.
 4. **Hands-on exercises** — small problems for the reader, with
    hidden-cell solutions.
-5. **Diagnostic / debugging walkthrough** — common errors a
-   MATLAB-native programmer will hit, what they look like, how to fix
-   them.
+5. **Diagnostic / debugging walkthrough** (rendered as a "Common
+   errors" section in each notebook) — errors a MATLAB-native
+   programmer will hit, what they look like, how to fix them.
 6. **Further reading** — PyTorch docs, key Python style guides, the
    relevant section of `Codebase_Documentation.md` (MATLAB-side).
 
@@ -152,14 +152,14 @@ are done; the arrows above show the recommended sequence.
 ### Module 01 — Python for MATLAB users
 | # | Notebook | MATLAB analog |
 |---|---|---|
-| 01.1 | `syntax_basics.ipynb` | scripts, functions, variables |
-| 01.2 | `control_flow.ipynb` | `if/else/for/while` — and why Python uses indentation |
-| 01.3 | `functions_and_lambdas.ipynb` | `varargin` vs `*args/**kwargs`; lambda vs anonymous function |
-| 01.4 | `classes_and_oop.ipynb` | `classdef`, inheritance, methods |
-| 01.5 | `modules_and_imports.ipynb` | MATLAB path vs Python packages; `from x import y` |
-| 01.6 | `error_handling.ipynb` | `try/catch` → `try/except`; reading a Python traceback |
-| 01.7 | `dataclasses_and_typed_configs.ipynb` | replacing `CheckVararginPairs` with `@dataclass` |
-| 01.8 | `the_python_standard_library_for_matlab_users.ipynb` | `os`, `pathlib`, `json`, `yaml`, `logging` |
+| 01.1 | [syntax_basics.ipynb](01_python_for_matlab_users/01.1_syntax_basics.ipynb) | scripts, functions, variables |
+| 01.2 | [control_flow.ipynb](01_python_for_matlab_users/01.2_control_flow.ipynb) | `if/else/for/while` — and why Python uses indentation |
+| 01.3 | [functions_and_lambdas.ipynb](01_python_for_matlab_users/01.3_functions_and_lambdas.ipynb) | `varargin` vs `*args/**kwargs`; lambda vs anonymous function |
+| 01.4 | [classes_and_oop.ipynb](01_python_for_matlab_users/01.4_classes_and_oop.ipynb) | `classdef`, inheritance, methods |
+| 01.5 | [modules_and_imports.ipynb](01_python_for_matlab_users/01.5_modules_and_imports.ipynb) | MATLAB path vs Python packages; `from x import y` |
+| 01.6 | [error_handling.ipynb](01_python_for_matlab_users/01.6_error_handling.ipynb) | `try/catch` → `try/except`; reading a Python traceback |
+| 01.7 | [dataclasses_and_typed_configs.ipynb](01_python_for_matlab_users/01.7_dataclasses_and_typed_configs.ipynb) | replacing `CheckVararginPairs` with `@dataclass` |
+| 01.8 | [the_python_standard_library_for_matlab_users.ipynb](01_python_for_matlab_users/01.8_the_python_standard_library_for_matlab_users.ipynb) | `os`, `pathlib`, `json`, `yaml`, `logging` |
 
 ### Module 02 — NumPy & PyTorch basics
 | # | Notebook | MATLAB analog |
