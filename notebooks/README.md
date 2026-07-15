@@ -198,13 +198,13 @@ are done; the arrows above show the recommended sequence.
 ### Module 05 — Training loop (companion to Milestone B/C)
 | # | Notebook | References |
 |---|---|---|
-| 05.1 | `the_custom_training_loop.ipynb` | walk through `cgg_trainNetwork` and the Python equivalent end-to-end |
-| 05.2 | `gradient_accumulation.ipynb` | `cgg_procGradientAggregation` ↔ PyTorch's native pattern |
-| 05.3 | `gradient_clipping.ipynb` | `Global` vs `SubNetwork` clip; `torch.nn.utils.clip_grad_norm_` |
-| 05.4 | `learning_rate_scheduling.ipynb` | step-decay + warmup; `torch.optim.lr_scheduler` |
-| 05.5 | `checkpoint_resume_state_machine.ipynb` | `cgg_trainAllAutoEncoder_v2.m:171–221` decision tree |
-| 05.6 | `the_two_stage_lifecycle.ipynb` | Stage 1 (unsupervised) → Stage 2 (supervised) |
-| 05.7 | `batch_norm_state_synchronization.ipynb` | `cgg_updateState` vs PyTorch's automatic running-mean updates |
+| 05.1 | [the_custom_training_loop.ipynb](05_training_loop/05.1_the_custom_training_loop.ipynb) | the five-line core; `cgg_trainNetwork` ↔ `train_one_epoch`/`fit_supervised`; the eval() dance |
+| 05.2 | [gradient_accumulation.ipynb](05_training_loop/05.2_gradient_accumulation.ipynb) | `cgg_procGradientAggregation` ↔ `micro_batch_chunks`; the weighting math; hardware-aware sizing |
+| 05.3 | [gradient_clipping.ipynb](05_training_loop/05.3_gradient_clipping.ipynb) | norm clipping (rescale not truncate); `Global` vs `SubNetwork`; where it sits in the loop |
+| 05.4 | [learning_rate_scheduling.ipynb](05_training_loop/05.4_learning_rate_scheduling.ipynb) | the `param_group["lr"]` mechanism; this project's curriculum-driven LR (no scheduler object) |
+| 05.5 | [checkpoint_resume_state_machine.ipynb](05_training_loop/05.5_checkpoint_resume_state_machine.ipynb) | Current vs Optimal (Note #2); resume reads Current; optimizer state deliberately not saved (Note #3) |
+| 05.6 | [the_two_stage_lifecycle.ipynb](05_training_loop/05.6_the_two_stage_lifecycle.ipynb) | unsupervised → supervised; the `copy_autoencoder_weights` handoff; per-stage resume |
+| 05.7 | [batch_norm_state_synchronization.ipynb](05_training_loop/05.7_batch_norm_state_synchronization.ipynb) | parameters vs buffers; forward-pass stat updates; `cgg_updateState` ↔ eval()/train() |
 
 ### Module 06 — Loss orchestration (companion to Milestone C)
 | # | Notebook | References |
