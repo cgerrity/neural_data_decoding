@@ -48,6 +48,7 @@ dev = [
     "jupyter>=1.0",
     "ipykernel>=6.27",
     "interrogate>=1.5",
+    "matplotlib>=3.7",  # curriculum notebooks render figures inline
 ]
 docs = [
     # MkDocs narrative track
