@@ -186,14 +186,14 @@ are done; the arrows above show the recommended sequence.
 ### Module 04 — Architecture (companion to Milestone B)
 | # | Notebook | References |
 |---|---|---|
-| 04.1 | `architecture_string_dispatcher.ipynb` | `PARAMETERS_cgg_constructNetworkArchitecture` ↔ `models.registry` |
-| 04.2 | `building_a_simple_encoder.ipynb` | `cgg_constructSimpleCoder` and its Python equivalent |
-| 04.3 | `rnn_building_blocks.ipynb` | GRU/LSTM in MATLAB vs PyTorch; batch_first, hidden state |
-| 04.4 | `convolutional_backbones.ipynb` | Conv1d / Resnet1d / Multi-Filter — Milestone CC.1 walkthrough |
-| 04.5 | `the_bottleneck.ipynb` | flatten + FC; why MATLAB has this exact structure |
-| 04.6 | `multi_head_classifier.ipynb` | `nn.ModuleDict` for the multi-head case |
-| 04.7 | `weighted_classification_loss.ipynb` | `WeightedLoss='Inverse'` mechanics |
-| 04.8 | `weight_initialization_he_vs_pytorch_defaults.ipynb` | why we explicitly call `nn.init.kaiming_normal_` |
+| 04.1 | [architecture_string_dispatcher.ipynb](04_architecture/04.1_architecture_string_dispatcher.ipynb) | the registry pattern: `ModelName` string → built module; open/closed vs MATLAB's switch |
+| 04.2 | [building_a_simple_encoder.ipynb](04_architecture/04.2_building_a_simple_encoder.ipynb) | the stacked block; the non-commutative transform→dropout→norm→activation order (Note #27) |
+| 04.3 | [rnn_building_blocks.ipynb](04_architecture/04.3_rnn_building_blocks.ipynb) | GRU/LSTM shapes, the `batch_first=True` imperative, the `(output, hidden)` return |
+| 04.4 | [convolutional_backbones.ipynb](04_architecture/04.4_convolutional_backbones.ipynb) | Conv/Resnet/Multi-Filter (CC.1); 1-D conv, the reshape adapter, encoder interchangeability |
+| 04.5 | [the_bottleneck.ipynb](04_architecture/04.5_the_bottleneck.ipynb) | the one-Linear bottleneck; per-timestep projection; the 2×latent VAE width |
+| 04.6 | [multi_head_classifier.ipynb](04_architecture/04.6_multi_head_classifier.ipynb) | one `nn.ModuleList` head per dimension; the list-of-logits output; the plain-list trap |
+| 04.7 | [weighted_classification_loss.ipynb](04_architecture/04.7_weighted_classification_loss.ipynb) | `WeightedLoss='Inverse'` — inverse-frequency weights, per-dimension, and why unweighted fails |
+| 04.8 | [weight_initialization_he_vs_pytorch_defaults.ipynb](04_architecture/04.8_weight_initialization_he_vs_pytorch_defaults.ipynb) | why He is set explicitly (Note #31); the vanishing/exploding-activation demo; MATLAB `'he'` ≠ PyTorch default |
 
 ### Module 05 — Training loop (companion to Milestone B/C)
 | # | Notebook | References |
