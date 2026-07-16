@@ -76,8 +76,17 @@ the MATLAB sources are referenced for parity testing only.
   programmatically-verified outputs; each follows the 6-section template
   and grounds claims in the actual source (verified via the interop /
   schedule / sweep Explore-agent maps). README curriculum map fully
-  linked. **Next up: Milestone F (reference docs, partially authored)**
-  or Milestone D polish.
+  linked.
+- **Milestone F (reference docs) is authored + CI-gated.** MkDocs
+  narrative site (24 pages: quickstart/concepts/cookbook/deployment/
+  user-guide/glossary/troubleshooting/contributing) + 24 ADRs + 7
+  per-subpackage READMEs + Sphinx API for all 5 subpackages.
+  `bash scripts/build_docs.sh both` (`mkdocs --strict` + `sphinx -W`),
+  `interrogate`, and notebook execution are wired into GitHub Actions
+  (`.github/workflows/{docs,ci}.yml`). Versioned publish via `mike` is
+  configured but **opt-in/manual** (enable Pages → run the docs `deploy`
+  job). Remaining F niceties: publishing the Sphinx API site alongside
+  the mike narrative site (ADR 015), more ADRs at decision-time.
 
 ## Conventions to follow
 

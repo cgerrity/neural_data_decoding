@@ -153,7 +153,7 @@ are gitignored — regenerate them locally with the MATLAB-batch scripts in
 | CC — Extra-credit features | ✅ Complete (CC.1 architecture registry + Conv/Resnet/Multi-Filter encoders, CC.2 PCA, CC.3 MAE, CC.4 SGDM, CC.5 all 5 S&F variants, CC.6 offset/scale augmentation, CC.7 unweighted loss, CC.8 SLURM sweep coverage + 24 integration tests) |
 | D — Cluster deployment | ✅ Complete (real-data `.mat` loader, 147-entry SLURM sweep dispatcher, `.slurm` template generator, run banner, user identity, `real_data_base` config) |
 | E — Educational curriculum | ✅ Complete (76 notebooks across 10 modules; every notebook executes clean via `nbconvert` with verified outputs) |
-| F — Reference documentation | 🚧 In progress (24 narrative pages written; MkDocs `--strict` + Sphinx `-W` both build clean; ADRs 002–024 and per-subpackage READMEs pending) |
+| F — Reference documentation | ✅ Authored + CI-gated (24 narrative pages + 24 ADRs + Sphinx API for all 5 subpackages + 7 subpackage READMEs; `mkdocs --strict` / `sphinx -W` / notebook-execution wired into GitHub Actions; versioned publish via `mike` is a manual opt-in — see `contributing.md`) |
 
 T3 convergence parity and T4 dashboard rendering are validated against real
 multi-day MATLAB training runs and are tracked separately from the code-side
@@ -164,10 +164,13 @@ milestone completion above.
 - **Reference documentation** (Milestone F): `docs/` — MkDocs narrative + Sphinx API.
   Build locally with `bash scripts/build_docs.sh`, output in `docs/build/`.
   Status: the full narrative site is written (quickstart, concepts, cookbook,
-  deployment guides, user guide, glossary, troubleshooting, contributing) and
-  the Sphinx API reference documents all five subpackages; `mkdocs build
-  --strict` and `sphinx-build -W` both pass. Remaining: ADRs 002–024,
-  per-subpackage READMEs, and CI/hosting wiring.
+  deployment guides, user guide, glossary, troubleshooting, contributing) plus
+  24 ADRs and 7 per-subpackage READMEs; the Sphinx API reference documents all
+  five subpackages. `mkdocs build --strict`, `sphinx-build -W`, `interrogate`,
+  and notebook execution are wired into GitHub Actions
+  (`.github/workflows/{docs,ci}.yml`). Versioned publishing (`mike` →
+  GitHub Pages) is configured but intentionally **opt-in/manual** — see the
+  "Publishing the docs" section of `docs/narrative/contributing.md`.
 - **Educational notebooks** (Milestone E): `notebooks/` — 76 Jupyter notebooks
   across 10 modules (00 orientation → 09 production deployment) taking a MATLAB
   programmer to expert Python/PyTorch fluency on this pipeline. **Status:

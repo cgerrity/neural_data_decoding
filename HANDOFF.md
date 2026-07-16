@@ -435,18 +435,23 @@ Milestone C status — what's done
   curriculum then takes over, final val_acc 0.438 beats the C #5
   single-stage 0.427).
 
-## Next up — Milestone F (reference docs) is the frontier
+## Next up — Milestone F is authored + CI-gated; only opt-in publishing remains
 
-Milestones 0 / A / B / C / CC / D are complete and smoke-runnable, and the
-full 76-notebook educational curriculum (E) is done — see the status table
-above. The remaining track is **Milestone F — reference documentation**, which
-is mostly authored:
+Milestones 0 / A / B / C / CC / D are complete and smoke-runnable, the full
+76-notebook educational curriculum (E) is done, and **Milestone F is
+essentially complete** — see the status table above. What shipped:
 
-- ✅ MkDocs narrative site fully written (concepts, cookbook, deployment, user
-  guide, glossary, troubleshooting, contributing); `mkdocs build --strict` passes.
+- ✅ MkDocs narrative site (concepts, cookbook, deployment, user guide,
+  glossary, troubleshooting, contributing); `mkdocs build --strict` passes.
 - ✅ Sphinx API reference documents all five subpackages; `sphinx-build -W` passes.
-- ⬜ ADRs 002–024 (only 001 exists), per-subpackage READMEs, docs CI + hosting /
-  versioning (`mike`). Run `bash scripts/build_docs.sh both` to build both sites.
+- ✅ ADRs 001–024 (index linked, all Accepted) + 7 per-subpackage READMEs.
+- ✅ CI: `.github/workflows/{docs,ci}.yml` run `build_docs.sh both`,
+  `interrogate`, `pytest`, and notebook execution on every push/PR.
+- ✅ `mike` versioning configured (`mkdocs.yml` version selector).
+- ⬜ **Publishing is opt-in/manual only** (by design): enable GitHub Pages,
+  then run the docs workflow's `deploy` job (`mike`). See the "Publishing the
+  docs" section of `docs/narrative/contributing.md`. Also open: publishing the
+  Sphinx API site alongside the mike narrative site (ADR 015).
 
 Lower-priority genuine gaps surfaced by the 2026-07 remaining-work audit (none
 block any active/production config): the 14 `NotImplementedError` normalization
