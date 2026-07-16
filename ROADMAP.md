@@ -66,6 +66,27 @@ declared-but-unused dev dependency.
 MATLAB + CUDA + a real reference ensemble; the harness above is the runnable
 scaffold, not the executed comparison.
 
+**2026-07-16 — third batch (CM_Table per-window column):**
+
+- ✅ **CM_Table per-window predictions** — `_write_cm_table_for_split` in
+  `cli.py` was a single-window placeholder (`window_predictions=[last_window]`,
+  self-documented as "Single-window placeholder"). It now emits one `Window_k`
+  column per window on the model's `W` axis — matching MATLAB's `Window_1 …
+  Window_K` layout (the reference fixture has 59). Verified empirically: the
+  model output's dim-1 IS the window axis (C_optimal → 30 windows, A_logistic →
+  50), so the old code was collapsing every window into `Window_1`. The
+  "last-timestep" comment was also a misnomer — dim-1 is windows, not timesteps.
+- ✅ **`test_cm_table_windows.py`** (3 tests) — ties the written column count to
+  the model's actual window axis, asserts each `Window_k` is a valid `(N, D)`
+  block of class indices, and guards against the placeholder regressing.
+- ✅ Stale `cm_table_format.py` docstring corrected (it claimed Milestone A emits
+  a single `Window_1` — that was the placeholder behavior, not MATLAB parity).
+
+*Still hard-blocked:* exact per-window **numeric** parity vs MATLAB needs a
+real-data MATLAB reference run (the shipped fixture is real-data, not
+synthetic-reproducible locally). This batch closes the **structural** gap and
+verifies it against the model; numeric parity remains a MATLAB-gated follow-up.
+
 ---
 
 ## Theme 1 — Scientific validation (the trust capstone)

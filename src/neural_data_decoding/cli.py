@@ -1452,24 +1452,29 @@ def _write_cm_table_for_split(
     logits transparently so the same writer works for Milestones A, B,
     and C.
 
-    Two prediction columns are written:
+    Two kinds of prediction columns are written:
 
-    * **Window prediction** — argmax of the last-timestep logits per dim.
-      Single-window placeholder until we wire per-timestep windows.
+    * **Per-window predictions** — argmax of the per-window logits per dim,
+      one ``Window_k`` column for each window on the model's ``W`` axis
+      (matching MATLAB's ``Window_1 … Window_K`` layout). A non-sequence
+      classifier (Milestone A logistic) has no window axis, so it emits a
+      single ``Window_1`` column.
     * **Aggregation prediction** — argmax of the normalized aggregated
       probability distribution per dim (matches MATLAB's
       ``Aggregation_Prediction`` column in
       ``cgg_getClassifierOutputsFromProbabilities.m``). Computed
-      regardless of ``mil_mode``: non-MIL averages per-timestep softmax
-      (uniform prior over timesteps); MIL marginalizes the joint
-      softmax over T.
+      regardless of ``mil_mode``: non-MIL averages the per-window softmax
+      (uniform prior over windows); MIL marginalizes the joint softmax.
     """
     import numpy as np
 
     from .models.composite import VariationalOutput
 
     model.eval()
-    all_window_predictions: list[list[int]] = []
+    # Per-batch prediction chunks, each shaped (B, W, D): argmax class per
+    # (trial, window, dimension). Concatenated over batches to (N, W, D), then
+    # sliced into one Window_k column per window for the MATLAB writer.
+    all_pred_chunks: list[np.ndarray] = []
     all_aggregation_predictions: list[list[int]] = []
     all_targets: list[list[int]] = []
     all_trial_ids: list[int] = []
@@ -1479,22 +1484,23 @@ def _write_cm_table_for_split(
             # Variational composite returns VariationalOutput; classifier-only
             # composites return a list[Tensor] of per-dim logits directly.
             logits_per_dim = out.logits if isinstance(out, VariationalOutput) else out
+            is_sequence = all(L.ndim == 3 for L in logits_per_dim)
 
-            # Window prediction: argmax of last-timestep logits per dim.
-            per_trial_window: list[list[int]] = []
-            for logits in logits_per_dim:
-                step_logits = logits[:, -1, :] if logits.ndim == 3 else logits
-                pred = step_logits.argmax(dim=-1).tolist()
-                if not per_trial_window:
-                    per_trial_window = [[p] for p in pred]
-                else:
-                    for i, p in enumerate(pred):
-                        per_trial_window[i].append(p)
-            all_window_predictions.extend(per_trial_window)
+            # Per-window prediction: argmax over the class axis for every window
+            # on dim 1 (the W axis). A non-sequence classifier has no window
+            # axis, so treat it as a single window.
+            per_dim_pred = [
+                (logits.argmax(dim=-1) if logits.ndim == 3
+                 else logits.argmax(dim=-1).unsqueeze(1))     # (B, W) or (B, 1)
+                for logits in logits_per_dim
+            ]
+            preds = torch.stack(per_dim_pred, dim=-1)         # (B, W, D)
+            all_pred_chunks.append(preds.cpu().numpy())
 
             # Aggregation prediction: per-trial uniform-prior aggregate
-            # (or MIL marginal). Only meaningful for sequence outputs.
-            if all(L.ndim == 3 for L in logits_per_dim):
+            # (or MIL marginal) for sequence outputs; for a non-sequence
+            # classifier the aggregate equals the single window prediction.
+            if is_sequence:
                 aggregated_probs = aggregate_classifier_predictions(
                     list(logits_per_dim), mil_mode=mil_mode,
                 )
@@ -1508,22 +1514,25 @@ def _write_cm_table_for_split(
                             per_trial_agg[i].append(p)
                 all_aggregation_predictions.extend(per_trial_agg)
             else:
-                # Non-sequence classifier (Milestone A logistic): the
-                # "aggregate" equals the window prediction by definition.
-                all_aggregation_predictions.extend(per_trial_window)
+                all_aggregation_predictions.extend(preds[:, 0, :].tolist())
 
             all_targets.extend(batch["targets"].tolist())
             all_trial_ids.extend(m["trial_id"] for m in batch["metadata"])
 
+    all_preds = np.concatenate(all_pred_chunks, axis=0)       # (N, W, D)
+    num_windows = int(all_preds.shape[1])
+
     data_numbers = np.array(all_trial_ids, dtype=np.int32) + 1  # MATLAB 1-indexed
     true_values = np.array(all_targets, dtype=np.float64)
-    window = np.array(all_window_predictions, dtype=np.float64)
+    window_predictions = [
+        all_preds[:, w, :].astype(np.float64) for w in range(num_windows)
+    ]
     aggregation = np.array(all_aggregation_predictions, dtype=np.float64)
     write_cm_table_mat(
         output_path,
         data_numbers=data_numbers,
         true_values=true_values,
-        window_predictions=[window],
+        window_predictions=window_predictions,
         aggregation_prediction=aggregation,
     )
 

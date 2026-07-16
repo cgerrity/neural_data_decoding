@@ -31,10 +31,14 @@ Shape confirmation from a real MATLAB validation run
 ``106×1``. ``TrialConfidence`` is ``106×1`` (per-trial). Both shape
 conventions are pinned by unit tests against that fixture.
 
-For Milestone A (Logistic Regression, no confidence) we emit ``Window_1`` ==
-``Aggregation_Prediction`` and fill both confidence columns with ones. The
-writer accepts the full schema so Milestones B and C can populate the missing
-columns without touching this module.
+The number of ``Window_k`` columns always matches the model's window (``W``)
+axis: the caller emits one column per window and the cross-window
+``Aggregation_Prediction`` alongside. When a model exposes only a single
+window, ``Window_1`` equals ``Aggregation_Prediction`` by definition. A
+classifier with no confidence heads (Milestone A logistic) leaves both
+confidence columns filled with ones. The writer accepts the full schema so
+Milestones B and C can populate the confidence columns without touching this
+module.
 
 The serialization format is **a SciPy struct of arrays** (``scipy.io.savemat``
 with a single key ``CM_Table`` mapping to a dict of column arrays). MATLAB's
