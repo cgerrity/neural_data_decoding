@@ -22,7 +22,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional, cast
 
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -129,6 +129,22 @@ def main(argv: list[str] | None = None) -> int:
             "else CPU), or an explicit device string like 'cuda', 'cuda:0', "
             "'mps', or 'cpu'."
         ),
+    )
+    train_p.add_argument(
+        "--wandb",
+        action="store_true",
+        help="Stream per-epoch metrics to a Weights & Biases run (off by default).",
+    )
+    train_p.add_argument(
+        "--wandb-project",
+        default="neural-data-decoding",
+        help="W&B project name (used only with --wandb).",
+    )
+    train_p.add_argument(
+        "--wandb-mode",
+        default="online",
+        choices=["online", "offline", "disabled"],
+        help="W&B run mode (used only with --wandb).",
     )
 
     check_p = sub.add_parser(
@@ -661,6 +677,26 @@ def _cmd_train(args: argparse.Namespace) -> int:
         else _print_epoch
     )
 
+    # Optional Weights & Biases logging (off by default). Compose a W&B logger
+    # onto the stdout callback so both run each epoch; finish the run below.
+    wandb_run = None
+    if args.wandb:
+        from .training.monitoring.wandb_logger import WandbEpochLogger, init_wandb_run
+
+        wandb_run = init_wandb_run(
+            project=args.wandb_project,
+            mode=args.wandb_mode,
+            config=cast("Mapping[str, Any]", OmegaConf.to_container(cfg, resolve=True)),
+        )
+        _wandb_logger = WandbEpochLogger(wandb_run)
+        _base_epoch_cb = epoch_cb
+
+        def _epoch_cb_with_wandb(history: Any) -> None:
+            _base_epoch_cb(history)
+            _wandb_logger(history)
+
+        epoch_cb = _epoch_cb_with_wandb
+
     # Two-stage dispatch: Stage 1 unsupervised pre-training + Stage 2
     # supervised fine-tuning when the variational config asks for it.
     num_epochs_ae = int(cfg.num_epochs_autoencoder)
@@ -699,6 +735,9 @@ def _cmd_train(args: argparse.Namespace) -> int:
             accumulation_max_size=accumulation_max_size,
             loss_type_decoder=str(cfg.get("loss_type_decoder", "MSE")),
         )
+
+    if wandb_run is not None:
+        wandb_run.finish()
 
     final_val_acc = history[-1].val.accuracy if history and history[-1].val else None
     print(f"\nDone. Final validation accuracy: {final_val_acc}")
