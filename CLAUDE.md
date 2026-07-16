@@ -66,9 +66,14 @@ the MATLAB sources are referenced for parity testing only.
   CC.8 (SLURM sweep coverage audit + 24 integration tests). Data
   layout also restructured to `(W, T, A, C)` matching MATLAB's
   `InputSize=[C, T, A]` + W.
-- **Next step is Milestone D (cluster deployment)** or the
-  educational notebooks (Milestone E, currently 0% authored) and
-  full reference documentation (Milestone F, partially authored).
+- Milestone D (cluster deployment) is **complete** (see `HANDOFF.md`).
+- **Milestone E (educational notebooks) is in progress** — Modules 00–06
+  authored (58 notebooks: 00 orientation, 01 Python-for-MATLAB, 02
+  NumPy/PyTorch, 03 data pipeline, 04 architecture, 05 training loop, 06
+  loss orchestration — all execute clean via nbconvert with verified
+  outputs). **Next up: Module 07 (dynamic curriculum), then 08 (output &
+  analysis) and 09 (production deployment).** Milestone F (reference
+  docs) partially authored.
 
 ## Conventions to follow
 

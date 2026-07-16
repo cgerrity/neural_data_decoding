@@ -209,19 +209,19 @@ are done; the arrows above show the recommended sequence.
 ### Module 06 — Loss orchestration (companion to Milestone C)
 | # | Notebook | References |
 |---|---|---|
-| 06.1 | `multi_task_losses_overview.ipynb` | ELBO + classification + confidence + offset/scale; EMA prior normalization |
-| 06.2 | `vae_and_the_elbo.ipynb` | KL intuition, reparameterization trick, `cgg_lossELBO_v2` |
-| 06.3 | `stochastic_vs_deterministic_placement.ipynb` | the two graph topologies; why Optimal uses Stochastic |
-| 06.4 | `the_ema_prior_normalization_deep_dive.ipynb` | `cgg_getLossInformation` + `cgg_processLossComponent` |
-| 06.5 | `mil_softmax_pooling.ipynb` | Multiple Instance Learning intuition; multi-axis softmax |
-| 06.6 | `confidence_routing.ipynb` | Trial vs Task confidence; `cgg_addTaskConfidenceToClassifier` |
-| 06.7 | `the_confidence_pd_controller.ipynb` | **highest-risk port** — full derivation + parity test walkthrough |
-| 06.8 | `l2_inside_the_loss_kernel.ipynb` | why MATLAB's grad-side L2 ≠ PyTorch's `weight_decay` on Adam |
-| 06.9 | `per_batch_prior_correction.ipynb` | the `WantBatchCorrection` flag |
-| 06.10 | `nan_masked_reconstruction.ipynb` | the two-layered NaN handling (input + loss) |
-| 06.11 | `single_total_loss_three_subnetworks.ipynb` | gradient-flow topology |
-| 06.12 | `ema_prior_normalization_deep_dive.ipynb` | how cross-component normalization works |
-| 06.13 | `sampling_layer_deterministic_at_inference.ipynb` | `self.training`-branched sampling |
+| 06.1 | [multi_task_losses_overview.ipynb](06_loss_orchestration/06.1_multi_task_losses_overview.ipynb) | ELBO + classification + confidence + offset/scale; EMA prior normalization |
+| 06.2 | [vae_and_the_elbo.ipynb](06_loss_orchestration/06.2_vae_and_the_elbo.ipynb) | KL intuition, reparameterization trick, `cgg_lossELBO_v2` |
+| 06.3 | [stochastic_vs_deterministic_placement.ipynb](06_loss_orchestration/06.3_stochastic_vs_deterministic_placement.ipynb) | the two graph topologies; why Optimal uses Stochastic |
+| 06.4 | [the_ema_prior_normalization_deep_dive.ipynb](06_loss_orchestration/06.4_the_ema_prior_normalization_deep_dive.ipynb) | `cgg_getLossInformation` + `cgg_processLossComponent` |
+| 06.5 | [mil_softmax_pooling.ipynb](06_loss_orchestration/06.5_mil_softmax_pooling.ipynb) | Multiple Instance Learning intuition; multi-axis softmax |
+| 06.6 | [confidence_routing.ipynb](06_loss_orchestration/06.6_confidence_routing.ipynb) | Trial vs Task confidence; `cgg_addTaskConfidenceToClassifier` |
+| 06.7 | [the_confidence_pd_controller.ipynb](06_loss_orchestration/06.7_the_confidence_pd_controller.ipynb) | **highest-risk port** — pure P-controller (mislabeled "PD"); live convergence + clamp |
+| 06.8 | [l2_inside_the_loss_kernel.ipynb](06_loss_orchestration/06.8_l2_inside_the_loss_kernel.ipynb) | why MATLAB's grad-side L2 ≠ PyTorch's `weight_decay` on Adam; the port uses AdamW |
+| 06.9 | [per_batch_prior_correction.ipynb](06_loss_orchestration/06.9_per_batch_prior_correction.ipynb) | the `want_batch_correction` flag; the 1/γ gradient correction (Eq. 10) |
+| 06.10 | [nan_masked_reconstruction.ipynb](06_loss_orchestration/06.10_nan_masked_reconstruction.ipynb) | the two-layered NaN handling (input + loss); the empirical-parity lesson (Note #38) |
+| 06.11 | [single_total_loss_three_subnetworks.ipynb](06_loss_orchestration/06.11_single_total_loss_three_subnetworks.ipynb) | gradient-flow topology; shared-encoder accumulation |
+| 06.12 | [ema_prior_normalization_deep_dive.ipynb](06_loss_orchestration/06.12_ema_prior_normalization_deep_dive.ipynb) | order of ops; first-iteration degeneracy; cross-component dynamics |
+| 06.13 | [sampling_layer_deterministic_at_inference.ipynb](06_loss_orchestration/06.13_sampling_layer_deterministic_at_inference.ipynb) | `self.training`-branched sampling; the forgot-`eval()` bug |
 
 ### Module 07 — Dynamic curriculum (companion to Milestone C)
 | # | Notebook | References |
