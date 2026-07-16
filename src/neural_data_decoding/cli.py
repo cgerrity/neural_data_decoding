@@ -83,6 +83,7 @@ from .training.schedules import (
     KLBaseAnneal,
     load_curriculum_by_name,
 )
+from .utils.seeding import set_global_seed
 
 
 CONFIG_ROOT = Path(__file__).resolve().parent.parent.parent / "configs"
@@ -145,6 +146,18 @@ def main(argv: list[str] | None = None) -> int:
         default="online",
         choices=["online", "offline", "disabled"],
         help="W&B run mode (used only with --wandb).",
+    )
+    train_p.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help=(
+            "Global RNG seed applied before model build + training, so the "
+            "same (config, fold, seed) reproduces the same run (default 0). "
+            "Vary it to draw an ensemble of seeds — e.g. --seed 1..5 for a "
+            "five-seed convergence study. Data splits are always seeded "
+            "separately from the fold index and are unaffected."
+        ),
     )
 
     check_p = sub.add_parser(
@@ -446,6 +459,11 @@ def _resolve_device(name: str) -> torch.device:
 
 def _cmd_train(args: argparse.Namespace) -> int:
     """Implementation of the ``train`` subcommand."""
+    # Seed every RNG before anything stochastic (model init, dropout, batch
+    # shuffling) so the same (config, fold, seed) reproduces the same run.
+    # Data splits carry their own fold-derived seeds and are unaffected.
+    set_global_seed(int(args.seed))
+
     cfg = _load_config(args.config_name)
     _apply_cfg_flags(cfg, args)
 

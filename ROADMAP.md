@@ -39,6 +39,33 @@ dedicated codebase-wide cleanup pass first (a large, deliberate mechanical diff)
 Also: the project uses **`ruff-format`, not `black`** — `black` is a
 declared-but-unused dev dependency.
 
+**2026-07-16 — second batch (W&B + Theme-1 convergence harness):**
+
+- ✅ **W&B epoch logger** — `training/monitoring/wandb_logger.py` + `train
+  --wandb/--wandb-project/--wandb-mode`, composed onto the existing stdout
+  `EpochCallback`. Off by default; tests run in `disabled` mode (no network).
+- ✅ **Reproducible training (the Theme-1 prerequisite)** — the CLI now calls
+  `set_global_seed` before model build/training and exposes `train --seed`
+  (default 0). Verified: same `(config, fold, seed)` reproduces the *exact*
+  final accuracy; different seeds produce a genuine distribution. Previously
+  the seeding utility existed but was **never called** — data splits were
+  seeded (`fold*17`) yet model init / dropout / batch order were not, so runs
+  drifted. This is what made a seed-ensemble parity study measurable at all.
+- ✅ **`convergence_metrics.py`** — pure distributional comparators for the
+  seed-ensemble parity goal (`PLAN.md`: "within 2σ across 5 seeds"):
+  `summarize_runs`, `within_n_sigma`, `means_within_n_sigma`, `ks_2sample`.
+  13 unit tests; interrogate 100%; pyright clean.
+- ✅ **`test_end_to_end_convergence.py`** — runnable now: same-seed
+  reproducibility + a 5-seed well-formed-distribution check driving the real
+  `train` CLI (reduced epochs, ~3s). Plus a **`needs_matlab`-gated G6 scaffold**
+  that skips cleanly until a MATLAB reference ensemble is recorded (numbers must
+  be produced empirically, never invented).
+- ✅ **CI coverage** — the `tests` job now runs with `--cov` term-missing.
+
+*Still hard-blocked (report, don't fake):* the **actual** G6 validation run needs
+MATLAB + CUDA + a real reference ensemble; the harness above is the runnable
+scaffold, not the executed comparison.
+
 ---
 
 ## Theme 1 — Scientific validation (the trust capstone)
