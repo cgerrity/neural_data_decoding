@@ -230,7 +230,7 @@ are done; the arrows above show the recommended sequence.
 | 07.2 | `piecewise_linear_schedules.ipynb` | `cgg_calculateDynamicValue` waypoint interpolation |
 | 07.3 | `load_parameters.ipynb` | `cgg_generateLoadParameters_v2` ↔ Python `LoadParameters` |
 | 07.4 | `loss_weights_curriculum.ipynb` | `cgg_generateLossWeights_v2`; KL annealing |
-| 07.5 | `freeze_unfreeze_curriculum.ipynb` | `cgg_setFrozenNetwork_v2` ↔ `requires_grad` management |
+| 07.5 | `freeze_unfreeze_curriculum.ipynb` | `cgg_setFrozenNetwork_v2` ↔ per-module LR-factor (NOT `requires_grad`); slow-learn factors |
 | 07.6 | `walkthrough_soft_three_stage_curriculum_shortened.ipynb` | end-to-end Optimal-curriculum trace |
 
 ### Module 08 — Output & analysis (companion to Milestone C/D)
