@@ -236,12 +236,12 @@ are done; the arrows above show the recommended sequence.
 ### Module 08 — Output & analysis (companion to Milestone C/D)
 | # | Notebook | References |
 |---|---|---|
-| 08.1 | `folder_hierarchy_generation.ipynb` | `cgg_generateEncoderSubFolders_v3` ↔ `interop.folder_hierarchy_matlab` |
-| 08.2 | `writing_mat_files_for_matlab.ipynb` | producing `.mat` files MATLAB scripts can consume |
-| 08.3 | `monitor_table_compatibility.ipynb` | MATLAB monitor field expectations |
-| 08.4 | `the_mat_round_trip_test.ipynb` | the T4 parity gate walkthrough |
-| 08.5 | `weights_and_biases_integration.ipynb` | W&B as the modern equivalent of the MATLAB monitor system |
-| 08.6 | `running_matlab_analysis_on_python_output.ipynb` | train in Python → aggregate with `DATA_cggAllNetworkEncoderResults` |
+| 08.1 | [folder_hierarchy_generation.ipynb](08_output_and_analysis/08.1_folder_hierarchy_generation.ipynb) | `cgg_generateEncoderSubFolders_v3` ↔ `interop.folder_hierarchy_matlab`; the config-encoded path (Note #15) |
+| 08.2 | [writing_mat_files_for_matlab.ipynb](08_output_and_analysis/08.2_writing_mat_files_for_matlab.ipynb) | producing `.mat` files MATLAB consumes; the `CM_Table` schema (Note #16) |
+| 08.3 | [monitor_table_compatibility.ipynb](08_output_and_analysis/08.3_monitor_table_compatibility.ipynb) | `monitoring/` is a stub; the `is_best` → `OnOptimalCallback` model-selection chain |
+| 08.4 | [the_mat_round_trip_test.ipynb](08_output_and_analysis/08.4_the_mat_round_trip_test.ipynb) | the T4 parity gate; pure-Python vs `needs_matlab` round-trip |
+| 08.5 | [weights_and_biases_integration.ipynb](08_output_and_analysis/08.5_weights_and_biases_integration.ipynb) | W&B as the modern monitor; declared-but-unwired; the `EpochCallback` hook |
+| 08.6 | [running_matlab_analysis_on_python_output.ipynb](08_output_and_analysis/08.6_running_matlab_analysis_on_python_output.ipynb) | train in Python → aggregate with `DATA_cggAllNetworkEncoderResults`; `matlab_runner` |
 
 ### Module 09 — Production deployment (companion to Milestone D)
 | # | Notebook | References |
