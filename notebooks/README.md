@@ -226,12 +226,12 @@ are done; the arrows above show the recommended sequence.
 ### Module 07 — Dynamic curriculum (companion to Milestone C)
 | # | Notebook | References |
 |---|---|---|
-| 07.1 | `curriculum_learning_intuition.ipynb` | why neural decoding benefits from staged training |
-| 07.2 | `piecewise_linear_schedules.ipynb` | `cgg_calculateDynamicValue` waypoint interpolation |
-| 07.3 | `load_parameters.ipynb` | `cgg_generateLoadParameters_v2` ↔ Python `LoadParameters` |
-| 07.4 | `loss_weights_curriculum.ipynb` | `cgg_generateLossWeights_v2`; KL annealing |
-| 07.5 | `freeze_unfreeze_curriculum.ipynb` | `cgg_setFrozenNetwork_v2` ↔ per-module LR-factor (NOT `requires_grad`); slow-learn factors |
-| 07.6 | `walkthrough_soft_three_stage_curriculum_shortened.ipynb` | end-to-end Optimal-curriculum trace |
+| 07.1 | [curriculum_learning_intuition.ipynb](07_dynamic_curriculum/07.1_curriculum_learning_intuition.ipynb) | why neural decoding benefits from staged training; the three levers |
+| 07.2 | [piecewise_linear_schedules.ipynb](07_dynamic_curriculum/07.2_piecewise_linear_schedules.ipynb) | `cgg_calculateDynamicValue` waypoint interpolation + the off-by-one quirk |
+| 07.3 | [load_parameters.ipynb](07_dynamic_curriculum/07.3_load_parameters.ipynb) | `cgg_generateLoadParameters_v2`; augmentation types; the live-read contract (Note #8) |
+| 07.4 | [loss_weights_curriculum.ipynb](07_dynamic_curriculum/07.4_loss_weights_curriculum.ipynb) | `cgg_generateLossWeights_v2`; reconstruct-first shape; KL annealing (two mechanisms) |
+| 07.5 | [freeze_unfreeze_curriculum.ipynb](07_dynamic_curriculum/07.5_freeze_unfreeze_curriculum.ipynb) | `cgg_setFrozenNetwork_v2` ↔ per-module LR-factor (NOT `requires_grad`); slow-learn factors |
+| 07.6 | [walkthrough_soft_three_stage_curriculum_shortened.ipynb](07_dynamic_curriculum/07.6_walkthrough_soft_three_stage_curriculum_shortened.ipynb) | end-to-end Optimal-curriculum trace; all three levers together |
 
 ### Module 08 — Output & analysis (companion to Milestone C/D)
 | # | Notebook | References |
