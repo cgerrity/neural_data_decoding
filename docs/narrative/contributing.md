@@ -82,15 +82,23 @@ Run the same gates locally before pushing: `python -m pytest`,
 ## Publishing the docs (versioned, via `mike`)
 
 Publishing is **opt-in and manual** — nothing is auto-published. The narrative
-site is versioned with [`mike`](https://github.com/jimporter/mike). To publish:
+site is versioned with [`mike`](https://github.com/jimporter/mike). To publish
+(order matters — the `gh-pages` branch must exist before Pages can point at it):
 
-1. Enable GitHub Pages once (repo **Settings → Pages → Deploy from branch →
-   `gh-pages`**).
-2. Trigger the `deploy` job of the **docs** workflow manually
-   (Actions → docs → *Run workflow*), entering a version label (e.g. `0.1`). It
+1. **Run the `deploy` job once** to create the `gh-pages` branch: GitHub
+   **Actions → docs → Run workflow**, entering a version label (e.g. `0.1`). It
    runs `mike deploy --push --update-aliases <version> latest` and
-   `mike set-default --push latest`, pushing the built site to the `gh-pages`
-   branch.
+   `mike set-default --push latest`, pushing the built site to `gh-pages`.
+   (Locally instead: `cd docs && mike deploy --push <version> latest`.)
+2. **Enable GitHub Pages** to serve that branch: repo **Settings → Pages →
+   Build and deployment → Source: "Deploy from a branch" → `gh-pages` / `(root)`
+   → Save**. The site then goes live at
+   `https://<owner>.github.io/neural_data_decoding/`.
+
+Note: **GitHub Pages on a *private* repo requires a paid plan** (Pro / Team /
+Enterprise). On a free plan a private repo cannot host Pages without making the
+site public — confirm the repo's visibility/plan before publishing proprietary
+docs.
 
 To publish locally instead: `cd docs && mike deploy --push <version> latest`.
 The Sphinx API site (`docs/build/api`) is built and verified in CI but is not
