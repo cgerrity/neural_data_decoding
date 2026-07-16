@@ -65,6 +65,13 @@ plugins:
             show_root_heading: true
             members_order: source
 
+# Versioned docs are published with `mike` (see scripts/build_docs.sh and the
+# manual "deploy" job in .github/workflows/docs.yml). This block renders the
+# version selector in the built site; it is inert until a mike deploy runs.
+extra:
+  version:
+    provider: mike
+
 nav:
   - Home: index.md
   - Quickstart: quickstart.md

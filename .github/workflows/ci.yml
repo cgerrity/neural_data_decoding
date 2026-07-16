@@ -1,0 +1,59 @@
+name: ci
+
+# Test suite + educational-notebook execution on every push and PR.
+# MATLAB-gated parity tests (-m needs_matlab) are deselected by default and are
+# not run here (no MATLAB on the runner).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Run the default suite
+        run: python -m pytest -q
+
+  notebooks:
+    name: execute notebooks
+    runs-on: ubuntu-latest
+    env:
+      WANDB_MODE: disabled       # 08.5 opens a W&B run in disabled mode
+      WANDB_SILENT: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Execute every curriculum notebook
+        # Runs each notebook fresh to a throwaway output; fails the job if any
+        # cell errors. The MATLAB-spawning cell in 08.6 self-skips when no
+        # MATLAB is present (matlab_available() -> False on the runner).
+        run: |
+          set -euo pipefail
+          # Notebooks live exactly one level deep (notebooks/<module>/<nb>.ipynb),
+          # so a simple glob matches all of them without needing bash globstar.
+          for nb in notebooks/*/*.ipynb; do
+            case "$nb" in *.ipynb_checkpoints*) continue;; esac
+            echo "::group::$nb"
+            jupyter nbconvert --to notebook --execute \
+              --ExecutePreprocessor.timeout=300 \
+              --output /tmp/_ci_throwaway.ipynb "$nb"
+            echo "::endgroup::"
+          done

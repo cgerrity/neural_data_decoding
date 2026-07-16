@@ -1,0 +1,78 @@
+name: docs
+
+# Builds both documentation sites (MkDocs narrative + Sphinx API) on every push
+# and PR as a verification gate. Publishing is a SEPARATE, MANUAL job
+# (workflow_dispatch only) so nothing is ever auto-published — see `deploy`.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/**"          # API reference is generated from docstrings
+      - "scripts/build_docs.sh"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "src/**"
+      - "scripts/build_docs.sh"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label to publish (e.g. 0.1 or a git tag). Publishes the narrative site to gh-pages via mike and aliases it to 'latest'."
+        required: true
+        default: "dev"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev,docs]"
+      - name: Build narrative (mkdocs --strict) + API (sphinx -W)
+        run: bash scripts/build_docs.sh both
+      - name: Docstring coverage (interrogate, 100%)
+        run: interrogate --fail-under=100 src/
+
+  deploy:
+    name: deploy (manual, versioned via mike)
+    # MANUAL ONLY — this job never runs on push/PR, so docs are never
+    # auto-published. Requires GitHub Pages to be enabled on the repo
+    # (Settings -> Pages -> Deploy from branch -> gh-pages).
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # mike pushes the built site to the gh-pages branch
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # mike needs full history + the gh-pages branch
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[docs]"
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Publish versioned narrative site (mike)
+        working-directory: docs
+        run: |
+          mike deploy --push --update-aliases "${{ github.event.inputs.version }}" latest
+          mike set-default --push latest
+      # NOTE: the Sphinx API site (docs/build/api) is built and verified above
+      # but is NOT yet versioned/published here — publishing it alongside the
+      # mike-managed narrative site is a follow-up (see ADR 015).

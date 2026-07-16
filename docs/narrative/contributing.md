@@ -61,5 +61,37 @@ engineer.
 ## Docs
 
 This site is MkDocs Material (`docs/mkdocs.yml`); the API reference is
-Sphinx-generated (`docs/api/`). Build both with `scripts/build_docs.sh`. The
-narrative build runs with `--strict`, so internal links must resolve.
+Sphinx-generated (`docs/api/`). Build both with `bash scripts/build_docs.sh both`
+(or `narrative` / `api` for one). The narrative build runs with `--strict` and
+the API build with `-W`, so **broken internal links and missing docstrings fail
+the build** — fix them before pushing.
+
+## Continuous integration
+
+Two GitHub Actions workflows run on every push to `main` and every PR:
+
+- **`.github/workflows/ci.yml`** — `pytest` (the default suite; MATLAB-gated
+  tests are deselected) and execution of every curriculum notebook via
+  `nbconvert`.
+- **`.github/workflows/docs.yml`** — `bash scripts/build_docs.sh both`
+  (`mkdocs --strict` + `sphinx -W`) plus `interrogate --fail-under=100`.
+
+Run the same gates locally before pushing: `python -m pytest`,
+`bash scripts/build_docs.sh both`, `interrogate --fail-under=100 src/`.
+
+## Publishing the docs (versioned, via `mike`)
+
+Publishing is **opt-in and manual** — nothing is auto-published. The narrative
+site is versioned with [`mike`](https://github.com/jimporter/mike). To publish:
+
+1. Enable GitHub Pages once (repo **Settings → Pages → Deploy from branch →
+   `gh-pages`**).
+2. Trigger the `deploy` job of the **docs** workflow manually
+   (Actions → docs → *Run workflow*), entering a version label (e.g. `0.1`). It
+   runs `mike deploy --push --update-aliases <version> latest` and
+   `mike set-default --push latest`, pushing the built site to the `gh-pages`
+   branch.
+
+To publish locally instead: `cd docs && mike deploy --push <version> latest`.
+The Sphinx API site (`docs/build/api`) is built and verified in CI but is not
+yet wired into the `mike` publish flow (see ADR 015).
