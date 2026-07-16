@@ -1,0 +1,25 @@
+Copyright (c) 2026 Charles Gerrity. All rights reserved.
+
+PROPRIETARY AND CONFIDENTIAL
+
+This software, its source code, and its accompanying documentation
+(collectively, the "Software") are proprietary to and the exclusive property
+of the copyright holder.
+
+No license, express or implied, is granted. No part of the Software may be
+copied, reproduced, modified, merged, published, distributed, sublicensed,
+sold, or used in any form or by any means — in whole or in part — without the
+express prior written permission of the copyright holder.
+
+The Software is provided "AS IS", without warranty of any kind, express or
+implied, including but not limited to the warranties of merchantability,
+fitness for a particular purpose, and non-infringement. In no event shall the
+copyright holder be liable for any claim, damages, or other liability arising
+from, out of, or in connection with the Software or its use.
+
+----------------------------------------------------------------------------
+NOTE: This is a minimal all-rights-reserved proprietary notice that formalizes
+the "Proprietary" declaration already present in pyproject.toml and README.md.
+It grants no rights (matching the existing intent). Review and adapt it to your
+actual legal requirements — or replace it with a different license — if you
+intend to share the code or documentation.

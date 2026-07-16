@@ -182,4 +182,6 @@ milestone completion above.
 
 ## License
 
-Proprietary. See parent repository.
+**Proprietary — all rights reserved.** See [`LICENSE`](LICENSE). No license is
+granted; the code and documentation may not be used, copied, or distributed
+without the copyright holder's express written permission.

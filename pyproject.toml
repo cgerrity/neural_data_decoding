@@ -8,9 +8,17 @@ version = "0.0.1"
 description = "Python port of the MATLAB neural decoding pipeline (Processing_Functions_cgg)."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Proprietary" }
+license = { file = "LICENSE" }
 authors = [
     { name = "Charles Gerrity" },
+]
+classifiers = [
+    "License :: Other/Proprietary License",
+    # `Private :: Do Not Upload` is not a valid PyPI trove classifier, so
+    # `twine`/PyPI reject any attempt to upload this proprietary package.
+    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
 ]
 
 dependencies = [
