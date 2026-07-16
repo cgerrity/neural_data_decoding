@@ -121,6 +121,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Allow training even if existing checkpoints are present in the result directory.",
     )
+    train_p.add_argument(
+        "--device",
+        default="auto",
+        help=(
+            "Compute device: 'auto' (default; prefers CUDA, then Apple MPS, "
+            "else CPU), or an explicit device string like 'cuda', 'cuda:0', "
+            "'mps', or 'cpu'."
+        ),
+    )
 
     check_p = sub.add_parser(
         "check-existing",
@@ -376,6 +385,49 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _resolve_device(name: str) -> torch.device:
+    """Resolve a ``--device`` argument to a concrete :class:`torch.device`.
+
+    Parameters
+    ----------
+    name
+        Either ``"auto"`` (prefer CUDA, then Apple MPS, else CPU) or an explicit
+        device string such as ``"cuda"``, ``"cuda:0"``, ``"mps"``, or ``"cpu"``.
+
+    Returns
+    -------
+    torch.device
+        The resolved device. ``"auto"`` never raises; an explicit device that is
+        unavailable falls back to CPU with a warning so a run is never silently
+        blocked on a missing accelerator.
+    """
+    if name == "auto":
+        # Auto-select CUDA (the cluster target) or fall back to CPU. Apple MPS
+        # is deliberately NOT auto-selected: several ops in this pipeline are
+        # unsupported on the MPS backend, so it would break rather than
+        # accelerate. Mac users can still opt in explicitly with ``--device mps``.
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        return torch.device("cpu")
+
+    device = torch.device(name)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        print(
+            f"+++ Requested device '{name}' but CUDA is unavailable; falling back to CPU.",
+            file=sys.stderr,
+        )
+        return torch.device("cpu")
+    if device.type == "mps" and not (
+        getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
+    ):
+        print(
+            f"+++ Requested device '{name}' but MPS is unavailable; falling back to CPU.",
+            file=sys.stderr,
+        )
+        return torch.device("cpu")
+    return device
+
+
 def _cmd_train(args: argparse.Namespace) -> int:
     """Implementation of the ``train`` subcommand."""
     cfg = _load_config(args.config_name)
@@ -504,6 +556,13 @@ def _cmd_train(args: argparse.Namespace) -> int:
     # groups so apply_freeze_to_optimizer can scale each network's lr
     # independently (mirrors MATLAB setLearnRateFactor per submodule).
     # Without a freeze schedule, a single group keeps existing behavior.
+    # Resolve the compute device and move the model onto it BEFORE building the
+    # optimizer (PCA is fit above on CPU data first; ``model.to`` then moves its
+    # buffers along with the rest). The loop kernels already move each batch to
+    # this device, so this is the only wiring the CLI needs for GPU training.
+    device = _resolve_device(args.device)
+    model = model.to(device)
+    print(f"+++ Training device: {device}", file=sys.stderr, flush=True)
     optimizer = _build_optimizer(cfg, model, curriculum)
 
     train_labels = torch.from_numpy(train_ds._labels).long()  # noqa: SLF001
@@ -512,6 +571,10 @@ def _cmd_train(args: argparse.Namespace) -> int:
         if str(cfg.weighted_loss).lower() == "inverse"
         else None
     )
+    # The per-dimension class-weight tensors are passed to the cross-entropy
+    # kernel, which requires them on the same device as the logits. No-op on CPU.
+    if class_weights is not None:
+        class_weights = [w.to(device) for w in class_weights]
 
     # For variational configs, expose all per-component weights AND enable
     # EMA prior normalization. For Logistic/non-variational, only classification
@@ -599,7 +662,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
             num_classes_per_dim=num_classes_per_dim,
             loss_weights_dict=loss_weights_dict, class_weights=class_weights,
             initial_priors=initial_priors, epoch_cb=epoch_cb,
-            on_optimal=_on_optimal, curriculum=curriculum,
+            on_optimal=_on_optimal, curriculum=curriculum, device=device,
         )
     else:
         history = fit_supervised(
@@ -608,7 +671,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
             val_loader=val_loader,
             optimizer=optimizer,
             num_epochs=int(cfg.num_epochs_full),
-            device=torch.device("cpu"),
+            device=device,
             loss_weights=loss_weights_dict,
             checkpoint_dir=result_dir,
             class_weights_per_dim=class_weights,
@@ -648,6 +711,7 @@ def _dispatch_two_stage(
     epoch_cb: Any,
     on_optimal: Any,
     curriculum: Optional[CurriculumBundle],
+    device: torch.device,
 ) -> list[EpochHistory]:
     """Build Stage 1 autoencoder + optimizer and dispatch to fit_two_stage.
 
@@ -674,6 +738,11 @@ def _dispatch_two_stage(
         "stitching_and_fusion_layer": str(cfg.get("stitching_and_fusion_layer", "")),
     }
     autoencoder = build_variational_autoencoder(ae_cfg)
+    # Move both networks onto the resolved device before building the Stage 1
+    # optimizer. The composite is typically already moved by the caller; moving
+    # it again is a no-op, and keeps this function self-contained.
+    autoencoder = autoencoder.to(device)
+    composite = composite.to(device)
     stage1_optimizer = resolve_optimizer_factory(
         str(cfg.get("optimizer", "ADAM")),
     )(
@@ -696,7 +765,7 @@ def _dispatch_two_stage(
         stage2_num_epochs=int(cfg.num_epochs_full),
         train_loader=train_loader,
         val_loader=val_loader,
-        device=torch.device("cpu"),
+        device=device,
         loss_weights=loss_weights_dict,
         checkpoint_dir=result_dir,
         class_weights_per_dim=class_weights,
