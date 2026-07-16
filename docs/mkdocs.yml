@@ -9,6 +9,8 @@
 
 site_name: neural_data_decoding
 site_description: Python port of the MATLAB neural decoding pipeline.
+site_url: https://cgerrity.github.io/neural_data_decoding/
+repo_url: https://github.com/cgerrity/neural_data_decoding
 site_dir: build/narrative
 copyright: Copyright &copy; 2026 Charles Gerrity. All rights reserved. Proprietary and confidential.
 
