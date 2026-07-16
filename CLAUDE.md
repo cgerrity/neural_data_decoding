@@ -67,12 +67,12 @@ the MATLAB sources are referenced for parity testing only.
   layout also restructured to `(W, T, A, C)` matching MATLAB's
   `InputSize=[C, T, A]` + W.
 - Milestone D (cluster deployment) is **complete** (see `HANDOFF.md`).
-- **Milestone E (educational notebooks) is in progress** — Modules 00–07
-  authored (64 notebooks: 00 orientation, 01 Python-for-MATLAB, 02
+- **Milestone E (educational notebooks) is in progress** — Modules 00–08
+  authored (70 notebooks: 00 orientation, 01 Python-for-MATLAB, 02
   NumPy/PyTorch, 03 data pipeline, 04 architecture, 05 training loop, 06
-  loss orchestration, 07 dynamic curriculum — all execute clean via
-  nbconvert with verified outputs). **Next up: Module 08 (output &
-  analysis), then 09 (production deployment).** Milestone F (reference
+  loss orchestration, 07 dynamic curriculum, 08 output & analysis — all
+  execute clean via nbconvert with verified outputs). **Next up: Module
+  09 (production deployment) — the final module.** Milestone F (reference
   docs) partially authored.
 
 ## Conventions to follow
