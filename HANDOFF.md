@@ -45,9 +45,11 @@ interrogate src/                       # must be 100%
 mkdocs build --strict -f docs/mkdocs.yml
 ```
 
-Expected: **792 passed, 4 deselected** by default; **4 passed** under
-`-m needs_matlab`; interrogate 100%; mkdocs strict 0 warnings (modulo
-the cosmetic Material-team blog notice).
+Expected: **825 passed, 5 deselected** by default; under `-m needs_matlab`,
+**4 passed** plus the convergence-parity scaffold, which self-skips until a
+MATLAB reference-accuracy ensemble is recorded
+(`tests/parity/test_end_to_end_convergence.py`); interrogate 100%; mkdocs
+strict 0 warnings (modulo the cosmetic Material-team blog notice).
 
 ## Where things are
 
