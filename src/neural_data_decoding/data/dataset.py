@@ -4,7 +4,7 @@ For Milestone A, we implement :class:`SyntheticTrialDataset` — an
 in-memory dataset that generates classification-friendly trial-shaped
 tensors with controllable signal-to-noise so the tracer bullet exercises
 the full training loop without needing the real ``.mat`` data on disk.
-A future milestone will add :class:`MatFileTrialDataset` that pulls
+:class:`~neural_data_decoding.data.mat_dataset.MatFileTrialDataset` pulls
 trials from ``.mat`` files via :mod:`neural_data_decoding.data.mat_files`.
 
 Trial shape contract
@@ -138,7 +138,7 @@ class SyntheticTrialDataset(Dataset):
     -----
     Time-shift augmentation is not exercised here because synthetic
     trials are not windowed from a longer source signal; that path
-    lives in the (future) real-data ``MatFileTrialDataset``.
+    lives in the real-data ``MatFileTrialDataset``.
     """
 
     def __init__(

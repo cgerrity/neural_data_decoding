@@ -28,7 +28,8 @@ obtainable by parameter switching against the existing Python
 builders. The registry resolves a name to a spec; the spec's flag
 combination then drives the existing composite/encoder/decoder
 construction (no new builder code per architecture). The ``'PCA'``
-entry remains a placeholder pending the CC.2 PCA backbone milestone.
+entry is backed by the CC.2 PCA backbone (``PCAEncoder`` in
+``models/layers/pca.py``, registered as the ``'PCA'`` encoder builder).
 """
 
 from __future__ import annotations
@@ -183,10 +184,11 @@ _ARCH_SPECS: dict[str, ArchitectureSpec] = {
         activation="", dropout=0.0, want_normalization=False,
         need_reshape=True, output_fully_connected=True, bottleneck_depth=1,
     ),
-    # CC.2 — pending. The PCA architecture uses ``Transform='PCA'`` which
-    # the SimpleSequenceEncoder doesn't yet support; resolving this entry
-    # works (it returns the spec) but composite construction will fail
-    # until the PCA backbone (CC.2) lands.
+    # CC.2 — done. The PCA architecture uses ``Transform='PCA'``, backed
+    # by the ``PCAEncoder`` backbone (``models/layers/pca.py``, registered
+    # as the ``'PCA'`` encoder builder via ``build_pca_encoder``);
+    # resolving this entry returns the spec and composite construction
+    # succeeds.
     "PCA": ArchitectureSpec(
         is_simple=False, is_variational=False, transform="PCA",
         activation="", dropout=0.0, want_normalization=False,

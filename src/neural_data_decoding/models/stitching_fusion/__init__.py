@@ -15,10 +15,10 @@ Five MATLAB option-sets are defined in
 * **Feedforward** — a single per-timestep ``Linear`` projection on each
   side (see :mod:`.feedforward`; Phase 1).
 * **Default** — convolutional cross-area fusion with ``WantSplitAreas``,
-  Leaky ReLU activations (Phase 2 — pending).
+  Leaky ReLU activations (Phase 2).
 * **Parallel Single Level**, **Cascade Single Kernel - Single
   Reduction**, **Cascade Single Kernel - Progressive Reduction** — Gemini
-  cascaded multi-area fusion variants (Phase 3 — pending).
+  cascaded multi-area fusion variants (Phase 3).
 
 CrossAreaFusionSize convention
 ------------------------------

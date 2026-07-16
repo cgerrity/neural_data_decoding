@@ -5,16 +5,19 @@ Ports the **gradient root** computation from ``cgg_lossComponents.m`` plus
 scalar ``Loss_Encoder`` that all three subnetworks backprop from
 (Critical Note #28). The full MATLAB orchestrator combines five
 components (Reconstruction + KL + Classification + Confidence +
-OffsetAndScale) with EMA prior normalization (Critical Notes #6 + #30);
-this Milestone A version only handles **Classification**, because that's
-the only component active for ``ModelName='Logistic Regression'``. The
-hooks for the other components are in place but stubbed out.
+OffsetAndScale) with EMA prior normalization (Critical Notes #6 + #30).
+This module ships both paths: :func:`aggregate_total_loss`, the simple
+weighted sum used for the Logistic Regression / Milestone A target
+(where only **Classification** is active in practice), and
+:func:`aggregate_normalized_losses`, the full five-component orchestrator
+that applies that EMA prior normalization.
 
 The orchestrator is intentionally side-effect-free: it takes pre-computed
 component values and returns the combined scalar + a dict of per-component
-values for telemetry. EMA prior normalization is *deferred to a future
-milestone* — for Milestone A every component's contribution is just its
-raw value scaled by its configured weight.
+values for telemetry. In :func:`aggregate_total_loss` every component's
+contribution is just its raw value scaled by its configured weight; EMA
+prior normalization is applied by the separate
+:func:`aggregate_normalized_losses` path.
 
 Examples
 --------
@@ -82,10 +85,11 @@ def aggregate_total_loss(
 ) -> tuple[torch.Tensor, LossBreakdown]:
     """Sum the active loss components into the single gradient-root scalar.
 
-    For Milestone A only ``classification_loss`` is non-``None`` in
-    practice. The other arguments are accepted (and tested) so the
-    interface is stable across milestones — Milestone C+ will start
-    passing values for the additional components.
+    For the Milestone A target only ``classification_loss`` is non-``None``
+    in practice. The other arguments are accepted (and tested) so the
+    interface is stable across milestones — from Milestone C on the
+    variational training loop also passes reconstruction, KL, and
+    confidence values through this path.
 
     Parameters
     ----------
@@ -111,11 +115,11 @@ def aggregate_total_loss(
 
     Notes
     -----
-    EMA prior normalization (Critical Note #30) is *not* applied here in
-    Milestone A. Milestone C will add an EMAPriorNormalizer stateful
-    object that re-scales each component before summation; that change
-    will be backward-compatible — callers won't need to pass it for the
-    Milestone A target.
+    EMA prior normalization (Critical Note #30) is *not* applied here —
+    this is the simple weighted-sum path. The companion
+    :func:`aggregate_normalized_losses` re-scales each component by its
+    EMA prior before summation; it is a separate entry point, so callers
+    targeting the Milestone A target never need to pass priors.
     """
 
     def w(key: str) -> float:
@@ -370,8 +374,11 @@ def aggregate_normalized_losses(
     confidence_beta
         Additional scalar multiplier for the confidence component
         (matches MATLAB's ``LossInformation.Confidence_Beta``). The
-        dynamic Beta-tracker is not yet ported; for now pass a constant
-        (typically ``1.0``).
+        dynamic Beta P-controller is ported in
+        :mod:`neural_data_decoding.training.losses.confidence`; the
+        training loop advances it per batch and threads the current value
+        in here. Pass a constant (``1.0``) only when the controller is
+        inactive.
 
     Returns
     -------

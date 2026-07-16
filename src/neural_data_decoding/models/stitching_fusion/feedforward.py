@@ -11,8 +11,9 @@ The same module hosts :func:`build_stitching_fusion`, the factory that
 dispatches on the MATLAB option-set string. Phase 2 (``'Default'``)
 wraps :class:`~neural_data_decoding.models.stitching_fusion.
 convolutional.PerWindowConvolutionalCoder` with the appropriate
-``Linear`` projection at the boundary. Phase 3 (Gemini variants) is
-still pending.
+``Linear`` projection at the boundary. Phase 3 (Gemini variants) wraps
+the Gemini stitching+fusion module with the same boundary ``Linear``
+projection.
 """
 
 from __future__ import annotations
@@ -118,8 +119,6 @@ def build_stitching_fusion(
 
     Raises
     ------
-    NotImplementedError
-        For the ``'Default'`` and Gemini variants pending in Phases 2-3.
     ValueError
         For an unrecognized ``network_type`` string.
     """

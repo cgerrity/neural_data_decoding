@@ -17,7 +17,7 @@ Variable                     Python cfg key                 Status
 ============================ ============================== =====
 Fold                         ``fold``                       ✅
 ModelName                    ``model_name``                 ✅ (8 registered: Logistic Regression, Feedforward, GRU, LSTM, Convolutional, Resnet, Multi-Filter Convolutional, PCA)
-DataWidth                    ``data_width``                 ◐ (cfg field passes through; sets the per-window time dim — synthetic generator uses ``samples_per_window`` directly; real-data loader will consume this when ``MatFileTrialDataset`` lands in Milestone D)
+DataWidth                    ``data_width``                 ◐ (cfg field passes through; sets the per-window time dim — synthetic generator uses ``samples_per_window`` directly; the real-data loader (``MatFileTrialDataset``) consumes it as the per-window ``T`` axis)
 WindowStride                 ``window_stride``              ◐ (cfg field passes through; controls the stride between adjacent windows during raw-signal windowing — only meaningful with the real-data loader; synthetic trials are generated as independent windows so the stride is implicit)
 HiddenSizes                  ``hidden_sizes``               ✅
 InitialLearningRate          ``initial_learning_rate``      ✅
@@ -65,7 +65,7 @@ ConfidenceType               ``confidence_type``            ✅
 ============================ ============================== =====
 
 Coverage: ~40 of 47 variables fully supported, 7 partial (data-prep
-fields that pass through cfg but are consumed by the pending
+fields that pass through cfg but are consumed by the
 real-data loader, plus never-exercised options), 1 N/A (parallelism
 not applicable to the single-GPU Python path).
 

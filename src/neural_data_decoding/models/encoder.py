@@ -304,7 +304,7 @@ def _make_typed_builder(transform: str):
 
 
 # Register the three Simple-branch ``ModelName`` strings active in Milestone B.
-# Milestone CC will register the conv/PCA variants alongside these.
+# The conv/PCA variants are registered alongside these in ``conv_encoder.py``.
 register_encoder("GRU")(_make_typed_builder("GRU"))
 register_encoder("LSTM")(_make_typed_builder("LSTM"))
 register_encoder("Feedforward")(_make_typed_builder("Feedforward"))
