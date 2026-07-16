@@ -2,14 +2,13 @@
 
 Python port of the MATLAB neural decoding pipeline.
 
-!!! info "Project status: Milestone B complete; Milestone C in progress"
-    Milestones 0 (foundation), A (logistic tracer), and B (GRU + classifier)
-    are done and runnable end-to-end on synthetic data, with single-step
-    forward-pass parity against MATLAB verified to ~1e-9. Milestone C (the full
-    Optimal VAE path) is underway. Several concept and cookbook pages below are
-    still stubs — they are authored alongside the code milestone that introduces
-    them. See `docs/PLAN.md` (at the project root, parallel to this
-    narrative tree) for the full migration roadmap.
+!!! info "Project status: all milestones complete"
+    Milestones 0/A/B/C/CC/D (the full pipeline), the 76-notebook educational
+    curriculum (E), and this reference documentation (F) are complete and
+    runnable end-to-end on synthetic data, with single-step forward-pass parity
+    against MATLAB verified to ~1e-9. See `ROADMAP.md` at the project root for
+    what remains (scientific convergence validation, a deferred MATLAB-parity
+    long tail, and polish) and `docs/PLAN.md` for the full migration spec.
 
 ## What this pipeline does
 

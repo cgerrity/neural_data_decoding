@@ -563,6 +563,17 @@ def _cmd_train(args: argparse.Namespace) -> int:
     device = _resolve_device(args.device)
     model = model.to(device)
     print(f"+++ Training device: {device}", file=sys.stderr, flush=True)
+    # GradientClipType='SubNetwork' is not yet implemented (the loop always
+    # applies a Global gradient-norm clip). Surface the fallback loudly instead
+    # of silently diverging from a config that requests per-subnetwork clipping.
+    _clip_type = str(cfg.get("gradient_clip_type", "Global"))
+    if _clip_type not in ("Global", ""):
+        print(
+            f"+++ WARNING: GradientClipType='{_clip_type}' is not implemented; "
+            "falling back to Global gradient-norm clipping.",
+            file=sys.stderr,
+            flush=True,
+        )
     optimizer = _build_optimizer(cfg, model, curriculum)
 
     train_labels = torch.from_numpy(train_ds._labels).long()  # noqa: SLF001

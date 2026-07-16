@@ -14,6 +14,31 @@
 
 The project is feature-complete against `docs/PLAN.md`: every code milestone (0/A/B/C/CC/D), the 76-notebook curriculum (E), and reference docs (F) are shipped, and single-step forward parity against MATLAB holds at ~1e-9 to 1e-6. What remains is **not new features but proof, plumbing, and polish**: (1) closing the gap between "one forward pass matches MATLAB" and "training converges the same way MATLAB does" — the actual scientific-trust question; (2) a MATLAB-parity long tail where several *shipped* sweep entries silently no-op or fall back instead of matching MATLAB; (3) wiring the port onto real GPUs and giving long cluster runs observability; and (4) hardening tests/CI and refreshing a few now-stale docs. No item below is a rewrite — most are wiring existing, already-tested kernels into the live path.
 
+## Progress log
+
+**2026-07-16 — first ("unblock + quick-win") batch landed:**
+
+- ✅ **Single-GPU wire-up** — `cli.py` no longer hardcodes CPU; a `train --device`
+  flag (`auto` → CUDA else CPU; MPS opt-in) plus model/network/class-weight
+  device placement. *Caveat: full GPU training must still be validated on real
+  CUDA hardware — an MPS run surfaced that some non-model tensors (class weights,
+  now moved; possibly loss priors) need device placement.*
+- ✅ **`tests/unit/test_cli.py`** — device resolution, `check-existing`, and the
+  `train` clobber-abort exit code 2 (previously-untested CLI surface).
+- ✅ **pyright is clean + CI-enforced** — fixed the 2 pre-existing errors
+  (`test_pca.py`), added `pyright` to dev extras + a `typecheck` CI job.
+- ✅ **`GradientClipType='SubNetwork'`** now warns loudly instead of silently
+  falling back to Global; `parameter_coverage.py` corrected ✅→◐.
+- ✅ **Doc-freshness** — narrative `index.md` banner, ADR 015 (`mike` is wired),
+  and `monitoring/__init__.py` docstring corrected.
+
+**Correction to the ruff item below:** enforcing `ruff` in CI is **not** a quick
+"just wire it" win — the code is not currently clean (`ruff check` reports ~199
+lint violations, `ruff format --check` wants ~47 files reformatted). It needs a
+dedicated codebase-wide cleanup pass first (a large, deliberate mechanical diff).
+Also: the project uses **`ruff-format`, not `black`** — `black` is a
+declared-but-unused dev dependency.
+
 ---
 
 ## Theme 1 — Scientific validation (the trust capstone)

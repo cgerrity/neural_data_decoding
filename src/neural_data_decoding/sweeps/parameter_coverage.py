@@ -50,7 +50,7 @@ IsVariational                ``is_variational``             ✅
 BottleNeckDepth              n/a (always 1 in active configs)   ◐
 WantSaveOptimalNet           always-on (CM_Table.mat writer)    ✅
 EncoderOutputType            ``encoder_output_type``        ✅
-GradientClipType             ``gradient_clip_type``         ✅
+GradientClipType             ``gradient_clip_type``         ◐ (only ``'Global'`` implemented; ``'SubNetwork'`` warns and falls back to Global — see cli.py)
 MultipleInstanceLearningType ``multiple_instance_learning_type`` ✅
 DynamicParameterSet          ``dynamic_parameter_set``      ✅
 StitchingAndFusionLayer      ``stitching_and_fusion_layer`` ✅ (CC.5 — all 5 variants)

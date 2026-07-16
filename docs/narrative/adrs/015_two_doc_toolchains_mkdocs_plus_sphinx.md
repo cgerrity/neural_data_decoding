@@ -75,12 +75,14 @@ together by `scripts/build_docs.sh`.
 - `build_api` runs `sphinx-build -W -b html docs/api docs/build/api` →
   `docs/build/api/`.
 
-**Honest scope note.** The script builds the two sites into **sibling output
-directories** under `docs/build/`; it does **not** currently merge them into one
-site with a shared navigation bar, and it does **not** invoke `mike`. The
-`mkdocs.yml` header comment ("assembles the unified site") and the `mike`
-versioning noted in that file are aspirational — the true present behavior is
-two independent HTML trees produced by one script.
+**Honest scope note.** `scripts/build_docs.sh` builds the two sites into
+**sibling output directories** under `docs/build/`; it does **not** merge them
+into one site with a shared navigation bar. Versioned publishing of the
+*narrative* site **is** wired — via `mike`, in the manual `deploy` job of
+`.github/workflows/docs.yml` (a live `gh-pages` deployment exists). Still open:
+publishing the Sphinx API site alongside the mike-managed narrative site, and a
+shared/unified navigation bar between the two. The `mkdocs.yml` header comment
+("assembles the unified site") still overstates the *unified* part.
 
 ## Consequences
 
@@ -104,9 +106,10 @@ two independent HTML trees produced by one script.
   crossing from narrative docs to the API reference moves between two separate
   HTML trees. Unified nav is deferred work, and the header comment overstates
   the current state.
-- `mike`-based versioning is documented but unwired, so there is a gap between
-  the stated intent and the shipped script that a future editor must not mistake
-  for working behavior.
+- The two outputs are still not stitched into one navigable site, and the
+  Sphinx API site is not yet published alongside the `mike`-versioned narrative
+  site (the docs `deploy` job publishes only the narrative site). Closing those
+  is deferred work.
 - Docstring style must stay strictly NumPy across the codebase so both
   `napoleon` (Sphinx) and `mkdocstrings` (MkDocs) parse it identically.
 
@@ -131,8 +134,9 @@ two independent HTML trees produced by one script.
 
 4. **One merged output site** built by a stitching step in `build_docs.sh`.
    Considered and consistent with the long-term intent, but **not implemented**:
-   the script currently emits two sibling trees. Unifying them (shared nav +
-   `mike` versioning) is left as future work rather than claimed as done.
+   the script currently emits two sibling trees. `mike` versioning of the
+   narrative site is now wired (in the docs CI `deploy` job); a shared/unified
+   nav across both sites is left as future work rather than claimed as done.
 
 ## References
 

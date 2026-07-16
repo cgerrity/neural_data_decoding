@@ -60,9 +60,9 @@ def test_fit_populates_components_from_sklearn() -> None:
     pca = PCA(n_components=4)
     pca.fit(data)
     np.testing.assert_allclose(
-        enc.components.numpy(), pca.components_, rtol=1e-5,
+        enc.components.numpy(), np.asarray(pca.components_), rtol=1e-5,
     )
-    np.testing.assert_allclose(enc.mean.numpy(), pca.mean_, rtol=1e-5)
+    np.testing.assert_allclose(enc.mean.numpy(), np.asarray(pca.mean_), rtol=1e-5)
 
 
 def test_fit_rejects_wrong_shape() -> None:
