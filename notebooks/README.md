@@ -248,7 +248,7 @@ are done; the arrows above show the recommended sequence.
 |---|---|---|
 | 09.1 | `environment_detection.ipynb` | `cgg_getBaseFolders` ↔ Python equivalent |
 | 09.2 | `slurm_dispatch.ipynb` | the `sweep-emit-slurm` subcommand + bash → sbatch model |
-| 09.3 | `hydra_config_composition.ipynb` | replacing the MATLAB parameter switch with composable configs |
+| 09.3 | `hydra_config_composition.ipynb` | composable configs replacing the MATLAB parameter switch — **plain OmegaConf `merge`, NOT Hydra** despite the name |
 | 09.4 | `parameter_sweeps.ipynb` | replacing the 47-dim `SLURMPARAMETERS_cgg_runAutoEncoder_v2` sweep |
 | 09.5 | `debugging_a_failing_run.ipynb` | troubleshooting cookbook: NaN losses, OOM, divergent training, parity-test failures |
 | 09.6 | `extending_the_pipeline.ipynb` | how to add a new architecture, loss component, curriculum, or target task |
