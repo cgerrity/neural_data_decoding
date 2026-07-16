@@ -246,12 +246,12 @@ are done; the arrows above show the recommended sequence.
 ### Module 09 — Production deployment (companion to Milestone D)
 | # | Notebook | References |
 |---|---|---|
-| 09.1 | `environment_detection.ipynb` | `cgg_getBaseFolders` ↔ Python equivalent |
-| 09.2 | `slurm_dispatch.ipynb` | the `sweep-emit-slurm` subcommand + bash → sbatch model |
-| 09.3 | `hydra_config_composition.ipynb` | composable configs replacing the MATLAB parameter switch — **plain OmegaConf `merge`, NOT Hydra** despite the name |
-| 09.4 | `parameter_sweeps.ipynb` | replacing the 47-dim `SLURMPARAMETERS_cgg_runAutoEncoder_v2` sweep |
-| 09.5 | `debugging_a_failing_run.ipynb` | troubleshooting cookbook: NaN losses, OOM, divergent training, parity-test failures |
-| 09.6 | `extending_the_pipeline.ipynb` | how to add a new architecture, loss component, curriculum, or target task |
+| 09.1 | [environment_detection.ipynb](09_production_deployment/09.1_environment_detection.ipynb) | `cgg_getBaseFolders` ↔ `get_base_paths`; Local/TEBA/ACCRE; storage tiers |
+| 09.2 | [slurm_dispatch.ipynb](09_production_deployment/09.2_slurm_dispatch.ipynb) | the `sweep-emit-slurm` subcommand + bash → sbatch array-job model; `SessionRunIDX` |
+| 09.3 | [hydra_config_composition.ipynb](09_production_deployment/09.3_hydra_config_composition.ipynb) | composable configs replacing the MATLAB parameter switch — **plain OmegaConf `merge`, NOT Hydra** despite the name |
+| 09.4 | [parameter_sweeps.ipynb](09_production_deployment/09.4_parameter_sweeps.ipynb) | the curated 147-point table replacing the 47-dim `SLURMPARAMETERS` sweep; coverage audit |
+| 09.5 | [debugging_a_failing_run.ipynb](09_production_deployment/09.5_debugging_a_failing_run.ipynb) | troubleshooting cookbook: NaN losses, OOM, divergent training, parity-test failures |
+| 09.6 | [extending_the_pipeline.ipynb](09_production_deployment/09.6_extending_the_pipeline.ipynb) | register-don't-modify: add an architecture, loss component, curriculum, or target task |
 
 ## Conventions
 
