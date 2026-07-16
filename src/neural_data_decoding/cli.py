@@ -1130,6 +1130,8 @@ def _build_real_data_split(
         "ending_idx": ending_idx,
         "start_end_percent": start_end_percent,
         "session_filter": session_filter,
+        "sampling_frequency": float(cfg.get("sampling_frequency", 1000.0)),
+        "want_separate_time_shift": bool(cfg.get("want_separate_time_shift", True)),
     }
 
     # Pass 1: load the full set of trials to discover the class mapping

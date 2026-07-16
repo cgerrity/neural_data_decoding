@@ -87,6 +87,36 @@ real-data MATLAB reference run (the shipped fixture is real-data, not
 synthetic-reproducible locally). This batch closes the **structural** gap and
 verifies it against the model; numeric parity remains a MATLAB-gated follow-up.
 
+**2026-07-16 — fourth batch (WantSeparateTimeShift windowing augmentation):**
+
+- ✅ **Time-shift windowing wired end-to-end** — `std_time_shift` /
+  `want_separate_time_shift` were plumbed through configs + dispatcher but
+  **never applied** (the kernel `generate_time_shift_samples` was orphaned;
+  `_window_trial` ignored it). Now `_window_trial` takes a per-`(C, A, W)`
+  shift array and gathers each window from a shifted, edge-clipped range —
+  ported to match MATLAB `cgg_getDataFromRange` exactly (read the source:
+  clip-to-`[1,N]` boundary, per-`(channel, probe)` gather; wrap/NaN options
+  are commented out in MATLAB, so clip is authoritative). `_load_windowed`
+  draws the shift live from the `load_schedule` (like the additive aug), so
+  train gets it and the un-augmented val/test/discovery splits don't.
+- ✅ **CLI + dataset threading** — new `sampling_frequency` (default 1000 Hz)
+  and `want_separate_time_shift` constructor params on `MatFileTrialDataset`,
+  threaded from cfg in `_build_real_data_split`.
+- ✅ **Verified end-to-end on the real fixture** — on `Decision_Data_0000011`
+  (C=58, TT=3001, A=6) the shift array is `(58, 6, 5)`, 1733/1740 cells
+  non-zero, range `[-100, +100]` samples (= ±`std_time_shift` at 1 kHz), and
+  re-drawn live per `__getitem__`. The `real_data_base` smoke test now
+  exercises the path and still passes.
+- ✅ **5 kernel unit tests** on crafted ramp data (zero-shift identity, uniform
+  shift, edge clipping both directions, per-cell separate shifts, seed
+  determinism). `parameter_coverage.py` markers ◐→✅ for both params.
+
+*Note:* `preload=True` bakes one shift per trial rather than re-drawing live
+(documented) — but the default CLI path uses `preload=False`, so this is a
+non-default trade-off, not a gap. Exact **numeric** parity vs a MATLAB
+time-shifted run is still MATLAB-gated; the port matches the source semantics
+and is verified structurally + statistically here.
+
 ---
 
 ## Theme 1 — Scientific validation (the trust capstone)

@@ -63,6 +63,7 @@ target-function dispatch.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -73,7 +74,10 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from neural_data_decoding.data.augmentation import additive_augmentation_signal
+from neural_data_decoding.data.augmentation import (
+    additive_augmentation_signal,
+    generate_time_shift_samples,
+)
 from neural_data_decoding.data.mat_files import load_mat
 from neural_data_decoding.training.schedules import Schedule
 
@@ -400,21 +404,57 @@ def _window_trial(
     data: np.ndarray,
     starts: np.ndarray,
     data_width: int,
+    time_shift_idx: np.ndarray | None = None,
 ) -> np.ndarray:
     """Window a single ``(C, TT, A)`` trial into ``(W, T, A, C)``.
 
     The Python axis order matches :class:`SyntheticTrialDataset`: per-
     window data is ``(T, A, C)`` and the leading ``W`` is the recurrent
     axis. MATLAB's ``(C, T, A, W)`` layout is permuted via ``moveaxis``.
+
+    Parameters
+    ----------
+    data
+        A single trial, shape ``(C, TT, A)`` — channels, samples, areas.
+    starts
+        Per-window start sample indices (0-indexed), shape ``(W,)``.
+    data_width
+        Samples per window (the ``T`` axis).
+    time_shift_idx
+        Optional per-``(channel, area, window)`` integer sample offsets,
+        shape ``(C, A, W)`` (as returned by
+        :func:`~neural_data_decoding.data.augmentation.generate_time_shift_samples`).
+        When given, each window's sample range is shifted independently per
+        ``(channel, area)`` and **clipped to** ``[0, TT - 1]`` before the
+        gather — mirroring MATLAB ``cgg_getDataFromRange`` (which clips OOB
+        indices to the signal edge). ``None`` (default) takes the fast
+        contiguous-slice path with no shift.
+
+    Returns
+    -------
+    numpy.ndarray
+        The windowed trial, shape ``(W, T, A, C)``.
     """
-    num_channels, _, num_areas = data.shape
+    num_channels, num_samples, num_areas = data.shape
     num_windows = int(starts.size)
     # Build (C, T, A, W) first — mirrors MATLAB's `this_Data`.
     windowed = np.empty(
         (num_channels, data_width, num_areas, num_windows), dtype=data.dtype
     )
-    for w, s in enumerate(starts):
-        windowed[:, :, :, w] = data[:, int(s) : int(s) + data_width, :]
+    if time_shift_idx is None:
+        for w, s in enumerate(starts):
+            windowed[:, :, :, w] = data[:, int(s) : int(s) + data_width, :]
+    else:
+        # Shifted gather (MATLAB cgg_getDataFromRange): each (channel, area)
+        # reads from a range offset by its own shift and clipped to the signal.
+        c_idx = np.arange(num_channels)[:, None, None]          # (C, 1, 1)
+        a_idx = np.arange(num_areas)[None, None, :]             # (1, 1, A)
+        for w, s in enumerate(starts):
+            base = np.arange(int(s), int(s) + data_width)       # (T,)
+            shift_ca = time_shift_idx[:, :, w]                  # (C, A)
+            sidx = base[None, :, None] + shift_ca[:, None, :]   # (C, T, A)
+            np.clip(sidx, 0, num_samples - 1, out=sidx)
+            windowed[:, :, :, w] = data[c_idx, sidx, a_idx]     # (C, T, A)
     # Permute to (W, T, A, C).
     return np.transpose(windowed, (3, 1, 2, 0))
 
@@ -485,15 +525,28 @@ class MatFileTrialDataset(Dataset):
     load_schedule
         Optional :class:`~neural_data_decoding.training.schedules.Schedule`
         whose ``std_channel_offset`` / ``std_white_noise`` /
-        ``std_random_walk`` entries drive per-trial augmentation,
-        read **live** at every ``__getitem__`` call (Critical Note #8).
+        ``std_random_walk`` entries drive per-trial additive augmentation,
+        and whose ``std_time_shift`` entry (when present and non-NaN)
+        drives per-window time-shift augmentation — all read **live** at
+        every ``__getitem__`` call (Critical Note #8).
     augmentation_seed
-        Independent RNG seed for the augmentation stream.
+        Independent RNG seed for the augmentation stream (both the additive
+        and time-shift draws consume this generator).
+    sampling_frequency
+        Data sampling rate in Hz (MATLAB ``SamplingFrequency``). Used to
+        convert the ms-based ``std_time_shift`` into a sample-count offset.
+        Default ``1000.0`` (the Decision-epoch rate).
+    want_separate_time_shift
+        When ``True`` (MATLAB ``WantSeparateTimeShift``), each
+        ``(channel, area, window)`` cell draws an independent time shift;
+        when ``False``, one shift is broadcast across all cells of a trial.
     preload
         When ``True``, all trials are loaded and windowed during
-        construction (faster training, more memory). When ``False``
-        (default), trials are loaded on every ``__getitem__`` call —
-        matches MATLAB ``fileDatastore`` behavior.
+        construction (faster training, more memory); note this bakes a
+        single time-shift draw per trial rather than re-drawing live. When
+        ``False`` (default), trials are loaded on every ``__getitem__``
+        call — matches MATLAB ``fileDatastore`` behavior and keeps
+        time-shift live.
     """
 
     def __init__(
@@ -515,6 +568,8 @@ class MatFileTrialDataset(Dataset):
         class_mapping_per_dim: list[dict[int, int]] | None = None,
         load_schedule: Schedule | None = None,
         augmentation_seed: int = 0,
+        sampling_frequency: float = 1000.0,
+        want_separate_time_shift: bool = True,
         preload: bool = False,
     ) -> None:
         data_dir_p = Path(data_dir)
@@ -565,6 +620,8 @@ class MatFileTrialDataset(Dataset):
         self.ending_idx = ending_idx if ending_idx is None else int(ending_idx)
         self.start_end_percent = start_end_percent
         self.load_schedule = load_schedule
+        self.sampling_frequency = float(sampling_frequency)
+        self.want_separate_time_shift = bool(want_separate_time_shift)
         self._aug_rng = np.random.default_rng(augmentation_seed)
 
         # Load all targets up front — cheap and needed for class mapping.
@@ -706,8 +763,49 @@ class MatFileTrialDataset(Dataset):
                 f"window_stride={self.window_stride}, starting_idx={self.starting_idx}, "
                 f"ending_idx={self.ending_idx})."
             )
-        windowed = _window_trial(data, starts, self.data_width)
+        time_shift_idx = self._time_shift_idx(data.shape[0], data.shape[2], int(starts.size))
+        windowed = _window_trial(
+            data, starts, self.data_width, time_shift_idx=time_shift_idx
+        )
         return windowed.astype(np.float32, copy=False)
+
+    def _time_shift_idx(
+        self, num_channels: int, num_areas: int, num_windows: int
+    ) -> np.ndarray | None:
+        """Draw per-window time-shift offsets, or ``None`` when inactive.
+
+        Time-shift is active only when a :attr:`load_schedule` is attached and
+        carries a non-NaN ``std_time_shift`` (so the discovery pass and the
+        un-augmented validation/test splits — both built without a schedule —
+        take the fast unshifted windowing path). The magnitude is read live
+        from the schedule, mirroring the additive augmentation.
+
+        Parameters
+        ----------
+        num_channels, num_areas, num_windows
+            Trial dimensions the shift array is drawn over.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            Integer sample offsets, shape ``(C, A, W)``, or ``None`` when
+            time-shift is disabled for this dataset.
+        """
+        sched = self.load_schedule
+        if sched is None or "std_time_shift" not in sched:
+            return None
+        std = sched.current("std_time_shift")
+        if std is None or math.isnan(float(std)):
+            return None
+        return generate_time_shift_samples(
+            num_channels=num_channels,
+            num_probes=num_areas,
+            num_windows=num_windows,
+            std_time_shift=float(std),
+            sampling_frequency=self.sampling_frequency,
+            want_separate=self.want_separate_time_shift,
+            rng=self._aug_rng,
+        )
 
     def _apply_augmentation(self, features_np: np.ndarray) -> np.ndarray:
         """Add a live-read augmentation tensor to a trial's windowed features.

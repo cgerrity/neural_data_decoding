@@ -145,6 +145,89 @@ def test_window_trial_pulls_correct_slices_and_transposes() -> None:
 
 
 # ----------------------------------------------------------------------
+# Time-shift windowing (MATLAB cgg_getDataFromRange parity)
+# ----------------------------------------------------------------------
+
+
+def _ramp_data(num_channels: int, num_samples: int, num_areas: int) -> np.ndarray:
+    """Trial where ``data[c, t, a] == t`` — the value reveals the sample pulled."""
+    ramp = np.arange(num_samples, dtype=np.float64)
+    return np.broadcast_to(
+        ramp[None, :, None], (num_channels, num_samples, num_areas)
+    ).copy()
+
+
+def test_window_trial_zero_shift_equals_no_shift() -> None:
+    """An all-zero shift array reproduces the unshifted windowing exactly."""
+    rng = np.random.default_rng(1)
+    data = rng.standard_normal((3, 40, 2)).astype(np.float64)
+    starts = np.array([0, 8, 16], dtype=np.int64)
+    zero_shift = np.zeros((3, 2, 3), dtype=np.int64)  # (C, A, W)
+    plain = _window_trial(data, starts, data_width=10)
+    shifted = _window_trial(data, starts, data_width=10, time_shift_idx=zero_shift)
+    assert np.array_equal(plain, shifted)
+
+
+def test_window_trial_uniform_shift_moves_every_window() -> None:
+    """A single shift shared across cells offsets each window's sample range."""
+    data = _ramp_data(2, 30, 2)  # data[c, t, a] == t
+    starts = np.array([5, 12], dtype=np.int64)
+    delta = 3
+    shift = np.full((2, 2, 2), delta, dtype=np.int64)  # (C, A, W)
+    out = _window_trial(data, starts, data_width=6, time_shift_idx=shift)
+    # out[w, t, a, c] == clip(starts[w] + t + delta, 0, 29); interior -> no clip.
+    for w_idx, s in enumerate(starts):
+        for t_idx in range(6):
+            assert np.all(out[w_idx, t_idx] == s + t_idx + delta)
+
+
+def test_window_trial_clips_shift_to_signal_edge() -> None:
+    """Shifts past the signal end clamp to the last sample (MATLAB clip)."""
+    data = _ramp_data(1, 20, 1)  # values 0..19
+    starts = np.array([15], dtype=np.int64)
+    shift = np.full((1, 1, 1), 100, dtype=np.int64)  # far past the end
+    out = _window_trial(data, starts, data_width=6, time_shift_idx=shift)
+    assert np.all(out == 19)  # every position clamped to the final sample
+    # And a large negative shift clamps to sample 0.
+    neg = np.full((1, 1, 1), -100, dtype=np.int64)
+    out_neg = _window_trial(data, starts, data_width=6, time_shift_idx=neg)
+    assert np.all(out_neg == 0)
+
+
+def test_window_trial_separate_shift_is_per_cell() -> None:
+    """With want_separate, each (channel, area) pulls from its own offset."""
+    data = _ramp_data(2, 30, 2)  # data[c, t, a] == t
+    starts = np.array([10], dtype=np.int64)
+    # Distinct shift per (channel, area) for the single window.
+    shift = np.array([[[1], [2]], [[3], [4]]], dtype=np.int64)  # (C=2, A=2, W=1)
+    out = _window_trial(data, starts, data_width=4, time_shift_idx=shift)  # (1,4,2,2)
+    for t_idx in range(4):
+        assert out[0, t_idx, 0, 0] == 10 + t_idx + 1  # (c=0, a=0)
+        assert out[0, t_idx, 1, 0] == 10 + t_idx + 2  # (a=1, c=0)
+        assert out[0, t_idx, 0, 1] == 10 + t_idx + 3  # (c=1, a=0)
+        assert out[0, t_idx, 1, 1] == 10 + t_idx + 4  # (c=1, a=1)
+
+
+def test_window_trial_time_shift_from_generator_is_deterministic() -> None:
+    """generate_time_shift_samples + _window_trial reproduces under a fixed seed."""
+    from neural_data_decoding.data.augmentation import generate_time_shift_samples
+
+    data = _ramp_data(2, 60, 2)
+    starts = np.array([10, 20, 30], dtype=np.int64)
+
+    def draw() -> np.ndarray:
+        rng = np.random.default_rng(7)
+        shift = generate_time_shift_samples(
+            num_channels=2, num_probes=2, num_windows=3,
+            std_time_shift=100.0, sampling_frequency=1000.0,
+            want_separate=True, rng=rng,
+        )
+        return _window_trial(data, starts, data_width=8, time_shift_idx=shift)
+
+    assert np.array_equal(draw(), draw())
+
+
+# ----------------------------------------------------------------------
 # Synthetic-fixture multi-trial coverage
 # ----------------------------------------------------------------------
 

@@ -56,8 +56,8 @@ DynamicParameterSet          ``dynamic_parameter_set``      ✅
 StitchingAndFusionLayer      ``stitching_and_fusion_layer`` ✅ (CC.5 — all 5 variants)
 StartEndPercent              n/a (stratification)           ◐
 wantStratifiedPartition      ``want_stratified_partition``  ✅
-STDTimeShift                 ``std_time_shift``             ✅
-WantSeparateTimeShift        n/a (time-shift always per-trial)  ◐
+STDTimeShift                 ``std_time_shift``             ✅ (windowing time-shift, live-read)
+WantSeparateTimeShift        ``want_separate_time_shift``   ✅ (per-(C,A,W) vs broadcast shift)
 WeightOffsetAndScale         ``weight_offset_and_scale``    ✅ (CC.6 — loss kernel + decoder block)
 RescaleLossEpoch             ``rescale_loss_epoch``         ✅
 WeightConfidence             ``weight_confidence``          ✅
