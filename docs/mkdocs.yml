@@ -99,6 +99,29 @@ nav:
   - Decision records:
       - adrs/index.md
       - adrs/001_tiered_parity_not_bit_exact.md
+      - adrs/002_pythonic_structure_over_matlab_mirror.md
+      - adrs/003_adamw_for_l2_weight_decay.md
+      - adrs/004_single_session_batching.md
+      - adrs/005_no_optimizer_state_in_checkpoints.md
+      - adrs/006_resume_reads_current_not_optimal.md
+      - adrs/007_mat_interop_surface.md
+      - adrs/008_hydra_config_composition.md
+      - adrs/009_ema_prior_cadence_via_rescale_loss_epoch.md
+      - adrs/010_augmentation_per_getitem.md
+      - adrs/011_validation_per_epoch_default.md
+      - adrs/012_pre_flight_check_no_overwrite.md
+      - adrs/013_memory_probe_via_cuda_mem_get_info.md
+      - adrs/014_single_gpu_default_accelerate_for_multi.md
+      - adrs/015_two_doc_toolchains_mkdocs_plus_sphinx.md
+      - adrs/016_minimal_matlab_cross_referencing_in_api_docs.md
+      - adrs/017_nan_masked_reconstruction_loss.md
+      - adrs/018_layer_block_order_dropout_before_norm.md
+      - adrs/019_single_total_loss_three_subnetworks.md
+      - adrs/020_confidence_loss_five_subtleties.md
+      - adrs/021_ema_prior_normalized_to_classification.md
+      - adrs/022_he_initialization_explicit.md
+      - adrs/023_augmentation_loss_auto_activated_by_topology.md
+      - adrs/024_sampling_layer_deterministic_at_inference.md
 
 strict: true
 
