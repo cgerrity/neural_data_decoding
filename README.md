@@ -5,17 +5,16 @@ implementing a variational autoencoder + multi-head classifier for multi-probe
 ephys data. Reproduces the active production path in modern PyTorch while writing
 `.mat`-compatible output where MATLAB-side analysis still consumes it.
 
-> **Status: Milestone C core + curriculum + two-stage + confidence + Eq. 2 CE complete; A/B/C all smoke-runnable end-to-end.**
-> Milestones 0 (foundation), A (logistic tracer), B (GRU + classifier), and
-> Milestone C's variational core (VAE sampling + ELBO + confidence
-> PD-controller + MIL pooling + EMA prior normalization + variational training
-> integration + dynamic curriculum schedules + full two-stage lifecycle with
-> KL annealing + confidence routing with Beta P-controller + **Eq. 2
-> interpolated cross-entropy**) are done. Remaining for C: MIL forward
-> integration, hardware-aware accumulation. T2 parity against MATLAB
-> verified to ~1e-9 (composite forward), ~1e-10 (confidence kernel),
-> 1e-6 (ELBO + MIL + sampling), ~1e-12 (curriculum interpolator + Beta
-> P-controller). See [`docs/PLAN.md`](docs/PLAN.md) for the full migration plan.
+> **Status: Milestones 0 / A / B / C / CC / D complete and smoke-runnable end-to-end. The full 76-notebook educational curriculum (E) is complete; reference documentation (F) is in progress.**
+> The port reproduces the active production path — VAE sampling + ELBO +
+> confidence P-controller + MIL pooling + EMA prior normalization + dynamic
+> curriculum schedules + full two-stage lifecycle with KL annealing + Eq. 2
+> interpolated cross-entropy — plus the extra-credit architectures (CC) and
+> cluster deployment (D: real-data loader, 147-entry SLURM sweep dispatcher,
+> `.slurm` template generator). T2 single-step forward parity against MATLAB is
+> verified to ~1e-9 (composite forward), ~1e-10 (confidence kernel), 1e-6
+> (ELBO + MIL + sampling), ~1e-12 (curriculum interpolator + Beta P-controller).
+> See [`docs/PLAN.md`](docs/PLAN.md) for the full migration plan.
 
 ## Quickstart
 
@@ -112,14 +111,14 @@ neural_data_decoding/
 │   ├── training/                 # Loop, lifecycle, checkpoint, losses, schedules, monitoring
 │   ├── interop/                  # MATLAB ↔ Python bridge (CM_Table, folder hierarchy,
 │   │                             #   YAML, weight converter, matlab -batch runner)
-│   ├── sweeps/                   # Submitit / Ray Tune launchers (Milestone D)
+│   ├── sweeps/                   # SLURM sweep dispatcher + .slurm generator (Milestone D)
 │   └── utils/                    # Paths, seeding, axis converters
-├── configs/                      # Hydra-composable YAML configs
+├── configs/                      # OmegaConf-composed YAML configs (base + target overlay)
 │   ├── target_milestone/         # A_logistic_synthetic, B_gru_classifier_synthetic,
-│   │                             #   C_optimal_synthetic
+│   │                             #   C_optimal_synthetic, C_two_stage_synthetic, real_data_base
 │   └── schedule/                 # Curriculum-regime presets (Milestone C #5)
 ├── tests/                        # parity / unit / fixtures
-├── notebooks/                    # Educational curriculum (~60 notebooks; Milestone E)
+├── notebooks/                    # Educational curriculum (76 notebooks, 10 modules; Milestone E)
 ├── docs/                         # MkDocs narrative + Sphinx API reference (Milestone F)
 └── scripts/                      # Fixture generators, doc builds
 ```
@@ -152,9 +151,9 @@ are gitignored — regenerate them locally with the MATLAB-batch scripts in
 | B — GRU + Classifier | ✅ Complete (T2 single-step parity verified) |
 | C — Full Optimal | ✅ Complete (VAE / ELBO / confidence / MIL / curriculum / two-stage / accumulation) |
 | CC — Extra-credit features | ✅ Complete (CC.1 architecture registry + Conv/Resnet/Multi-Filter encoders, CC.2 PCA, CC.3 MAE, CC.4 SGDM, CC.5 all 5 S&F variants, CC.6 offset/scale augmentation, CC.7 unweighted loss, CC.8 SLURM sweep coverage + 24 integration tests) |
-| D — Cluster deployment | ⏳ Pending |
-| E — Educational curriculum | ⏳ Directory scaffold only (0 of ~55 notebooks authored) |
-| F — Reference documentation | 🚧 ~6 concept pages + ~4 cookbook entries authored; Sphinx API stub exists; full curriculum coverage pending |
+| D — Cluster deployment | ✅ Complete (real-data `.mat` loader, 147-entry SLURM sweep dispatcher, `.slurm` template generator, run banner, user identity, `real_data_base` config) |
+| E — Educational curriculum | ✅ Complete (76 notebooks across 10 modules; every notebook executes clean via `nbconvert` with verified outputs) |
+| F — Reference documentation | 🚧 In progress (24 narrative pages written; MkDocs `--strict` + Sphinx `-W` both build clean; ADRs 002–024 and per-subpackage READMEs pending) |
 
 T3 convergence parity and T4 dashboard rendering are validated against real
 multi-day MATLAB training runs and are tracked separately from the code-side
@@ -164,15 +163,17 @@ milestone completion above.
 
 - **Reference documentation** (Milestone F): `docs/` — MkDocs narrative + Sphinx API.
   Build locally with `bash scripts/build_docs.sh`, output in `docs/build/`.
-  Status: Sphinx API scaffold + ~6 concept pages + ~4 cookbook entries
-  authored; the full curriculum coverage spec'd in `docs/PLAN.md` is still
-  pending and will likely be filled in alongside or after Milestone D.
-- **Educational notebooks** (Milestone E): `notebooks/` — target ~55 Jupyter notebooks
-  across 10 modules taking a MATLAB programmer to expert Python/PyTorch
-  fluency on this pipeline. **Status: directory scaffold only — 0 notebooks
-  authored.** Originally planned to be written alongside each code milestone
-  but in practice we've prioritized the code-side work first; the notebook
-  curriculum is a follow-up to Milestone D.
+  Status: the full narrative site is written (quickstart, concepts, cookbook,
+  deployment guides, user guide, glossary, troubleshooting, contributing) and
+  the Sphinx API reference documents all five subpackages; `mkdocs build
+  --strict` and `sphinx-build -W` both pass. Remaining: ADRs 002–024,
+  per-subpackage READMEs, and CI/hosting wiring.
+- **Educational notebooks** (Milestone E): `notebooks/` — 76 Jupyter notebooks
+  across 10 modules (00 orientation → 09 production deployment) taking a MATLAB
+  programmer to expert Python/PyTorch fluency on this pipeline. **Status:
+  complete** — every notebook executes clean via `jupyter nbconvert --to
+  notebook --execute` with programmatically-verified outputs. See
+  [`notebooks/README.md`](notebooks/README.md) for the full curriculum map.
 - **Migration plan**: [`docs/PLAN.md`](docs/PLAN.md) — the canonical spec for
   this port, including the full list of MATLAB quirks that must be preserved.
 

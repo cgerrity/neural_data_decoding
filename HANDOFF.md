@@ -2,7 +2,7 @@
 
 A self-contained snapshot of project state, conventions, and the next step.
 Intended for a fresh contributor (human or AI) picking up the work — read
-top-to-bottom, then start at "Next up". Last updated 2026-06-01.
+top-to-bottom, then start at "Next up". Last updated 2026-07-16.
 
 ## Where the project lives
 
@@ -76,7 +76,7 @@ neural_data_decoding/
     └── api/                 # Sphinx source
 ```
 
-## Current status (2026-05-29)
+## Current status (2026-07-16)
 
 | Milestone | State | Parity precision |
 |-----------|-------|------------------|
@@ -87,6 +87,7 @@ neural_data_decoding/
 | CC — Extra-credit features | ✅ **all 8 sub-milestones done** — CC.1 (Conv/Resnet/Multi-Filter encoders) + CC.2 (PCA backbone) + CC.3 (MAE) + CC.4 (SGDM) + CC.5 (S&F all 5 variants) + CC.6 (offset/scale augmentation) + CC.7 (unweighted loss) + CC.8 (SLURM sweep coverage audit + 24 integration tests) | See `sweeps/parameter_coverage.py` for the full 47-variable support matrix |
 | D — Cluster deployment | ✅ **Complete (all 8 sub-items).** Real-data dataset, 147-entry sweep dispatcher, CLI overrides, start-of-run banner, `.slurm` template generator, user identification, `real_data_base.yaml` config, end-to-end smoke run on `Decision_Data_0000011.mat`. See [`docs/MILESTONE_D_PLAN.md`](docs/MILESTONE_D_PLAN.md) | D.1 windowing parity by direct indexing; D.2 verified against MATLAB SLURMPARAMETERS_cgg_runAutoEncoder_v2.m; D.8 trains + writes both CM_Tables end-to-end |
 | E — Educational notebooks | ✅ **COMPLETE — all 10 modules, 76 notebooks** under `notebooks/`. 00 orientation ×8, 01 Python-for-MATLAB ×8, 02 NumPy/PyTorch ×8, 03 data pipeline ×6, 04 architecture ×8, 05 training loop ×7, 06 loss orchestration ×13, 07 dynamic curriculum ×6, 08 output & analysis ×6, 09 production deployment ×6. | Every notebook executes clean via `jupyter nbconvert --to notebook --execute` with programmatically-verified outputs; 6-section template; nbstripout strips outputs at commit. README curriculum map fully linked. Recurring spine: PyTorch-defaults-≠-MATLAB, read-the-code-not-the-label, verify-parity-empirically, register-don't-modify. |
+| F — Reference documentation | 🚧 **In progress.** Narrative MkDocs site fully written (24 pages: concepts, cookbook, deployment, user guide, glossary, troubleshooting, contributing); Sphinx API reference documents all five subpackages. `bash scripts/build_docs.sh both` builds clean (`mkdocs --strict` + `sphinx -W`). | Remaining: ADRs 002–024 (only 001 written), per-subpackage READMEs, docs CI + hosting/versioning (`mike`). |
 
 Milestone C status — what's done
 
@@ -434,16 +435,32 @@ Milestone C status — what's done
   curriculum then takes over, final val_acc 0.438 beats the C #5
   single-stage 0.427).
 
-## Next up — Milestone C complete; CC partial (3 of 8 done); pick CC remainder or D
+## Next up — Milestone F (reference docs) is the frontier
 
-Milestone C's *active production path* is end-to-end runnable
-(variational core, curriculum schedules, two-stage lifecycle,
-confidence routing with Beta P-controller and Eq. 2 interpolated CE,
-MIL forward integration, aggregate prediction in CM_Table, hardware-
-aware gradient accumulation). Milestone CC is partially done — 3 of
-the 8 sub-milestones in `docs/PLAN.md` are complete.
+Milestones 0 / A / B / C / CC / D are complete and smoke-runnable, and the
+full 76-notebook educational curriculum (E) is done — see the status table
+above. The remaining track is **Milestone F — reference documentation**, which
+is mostly authored:
 
-### Option A — finish Milestone CC
+- ✅ MkDocs narrative site fully written (concepts, cookbook, deployment, user
+  guide, glossary, troubleshooting, contributing); `mkdocs build --strict` passes.
+- ✅ Sphinx API reference documents all five subpackages; `sphinx-build -W` passes.
+- ⬜ ADRs 002–024 (only 001 exists), per-subpackage READMEs, docs CI + hosting /
+  versioning (`mike`). Run `bash scripts/build_docs.sh both` to build both sites.
+
+Lower-priority genuine gaps surfaced by the 2026-07 remaining-work audit (none
+block any active/production config): the 14 `NotImplementedError` normalization
+recipes (`data/normalization.py`), `GradientClipType='SubNetwork'` (falls back
+to Global), `BottleNeckDepth>1` stacking, per-time-point PCA, the OOM memory
+probe (Note #19), and wiring the implemented-and-tested time-shift augmentation
+into the real-data loader. See `docs/PLAN.md`.
+
+---
+
+The rest of this section is a **completed changelog of Milestone CC** (all 8
+sub-milestones done), kept for historical reference.
+
+### Milestone CC — completed changelog
 
 The official numbering is from `docs/PLAN.md` lines 587-594 (CC.1 …
 CC.8). Past commits used my-own "CC #1/#2/#3" sequential labels for
